@@ -97,7 +97,7 @@ def delete_category(name):
     service = get_service()
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
-        range="Categories!A2:Z"
+        range="Categories!A:Z"
     ).execute()
 
     service.spreadsheets().values().update(
@@ -191,7 +191,7 @@ def flush_type_today(type_tx):
     service = get_service()
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
-        range="Sheet1!A2:Z"
+        range="Sheet1!A:Z"
     ).execute()
 
     service.spreadsheets().values().update(
@@ -218,7 +218,7 @@ def flush_month():
     service = get_service()
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
-        range="Sheet1!A2:Z"
+        range="Sheet1!A:Z"
     ).execute()
 
     service.spreadsheets().values().update(
@@ -232,7 +232,7 @@ def flush_all():
     service = get_service()
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
-        range="Sheet1!A2:Z"
+        range="Sheet1!A:Z"
     ).execute()
 
 # ================= TELEGRAM =================
@@ -346,7 +346,9 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200); self.end_headers(); return
 
             if state and state.get("step") == "manage_add_category":
-                if ":" in text:
+                if ":" not in text:
+                    send(chat_id, "Format salah.")
+                else:
                     type_tx, name = text.split(":", 1)
                     type_tx = type_tx.strip()
                     name = name.strip()
@@ -378,7 +380,7 @@ class handler(BaseHTTPRequestHandler):
 
             if text == "Flush All":
                 flush_all()
-                send(chat_id, "All transactions deleted.", main_kb())
+                send(chat_id, "All deleted.", main_kb())
                 self.send_response(200); self.end_headers(); return
 
             # RECAP
