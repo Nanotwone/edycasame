@@ -302,13 +302,39 @@ class handler(BaseHTTPRequestHandler):
 
             state = user_states.get(chat_id)
 
+            # FLUSH
+            if text == "Flush Menu":
+                send(chat_id, "Choose:", flush_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush Income Today":
+                flush_type_today("Income")
+                send(chat_id, "Income today deleted.", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush Expense Today":
+                flush_type_today("Expense")
+                send(chat_id, "Expense today deleted.", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush Month":
+                flush_month()
+                send(chat_id, "This month deleted.", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush All":
+                flush_all()
+                send(chat_id, "All transactions deleted.", main_kb())
+                self.send_response(200); self.end_headers(); return
+
             # RECAP
             if text == "Today":
                 income, expense, balance = calculate_summary("today")
                 send(chat_id,
                      f"Today\nIncome: {format_currency(income)}\n"
                      f"Expense: {format_currency(expense)}\n"
-                     f"Balance: {balance_message(balance)}")
+                     f"Balance: {balance_message(balance)}",
+                     other_kb())
                 self.send_response(200); self.end_headers(); return
 
             if text == "This Month":
@@ -316,7 +342,8 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id,
                      f"This Month\nIncome: {format_currency(income)}\n"
                      f"Expense: {format_currency(expense)}\n"
-                     f"Balance: {balance_message(balance)}")
+                     f"Balance: {balance_message(balance)}",
+                     other_kb())
                 self.send_response(200); self.end_headers(); return
 
             if text == "All":
@@ -324,10 +351,16 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id,
                      f"All\nIncome: {format_currency(income)}\n"
                      f"Expense: {format_currency(expense)}\n"
-                     f"Balance: {balance_message(balance)}")
+                     f"Balance: {balance_message(balance)}",
+                     other_kb())
                 self.send_response(200); self.end_headers(); return
 
-            send(chat_id, "Bot running.")
+            # START
+            if text == "/start":
+                send(chat_id, "Main Menu:", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            send(chat_id, "Main Menu:", main_kb())
             self.send_response(200); self.end_headers(); return
 
         except Exception as e:
