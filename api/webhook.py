@@ -11,7 +11,9 @@ from datetime import datetime, timezone, timedelta
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 SHEET_ID = os.environ.get("SHEET_ID")
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
-ALLOWED_USERS = list(map(int, os.environ.get("ALLOWED_USERS").split(",")))
+
+allowed_raw = os.environ.get("ALLOWED_USERS", "")
+ALLOWED_USERS = [int(x) for x in allowed_raw.split(",") if x.strip().isdigit()]
 
 user_states = {}
 
@@ -27,13 +29,11 @@ def balance_message(balance):
     if balance >= 0:
         if balance >= 1000000:
             return f"{format_yen(balance)} 🎉 (Excellent!)"
-        else:
-            return f"{format_yen(balance)} 💰 (Good Job!)"
+        return f"{format_yen(balance)} 💰 (Good Job!)"
     else:
         if abs(balance) >= 1000000:
             return f"{format_yen(balance)} 🚨 (Debt Alert!)"
-        else:
-            return f"{format_yen(balance)} ⚠️ (Be careful!)"
+        return f"{format_yen(balance)} ⚠️ (Be careful!)"
 
 # ================= GOOGLE =================
 def get_service():
@@ -51,6 +51,12 @@ def get_sheet(range_name):
         range=range_name
     ).execute()
     return result.get("values", [])
+
+def normalize_row(row):
+    clean = row[:4]
+    while len(clean) < 4:
+        clean.append("")
+    return clean
 
 # ================= CATEGORY =================
 def get_categories():
@@ -91,12 +97,12 @@ def delete_category(name):
     service = get_service()
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
-        range="Categories!A2:B"
+        range="Categories!A:Z"
     ).execute()
 
     service.spreadsheets().values().update(
         spreadsheetId=SHEET_ID,
-        range="Categories!A1:B",
+        range="Categories!A1",
         valueInputOption="RAW",
         body={"values": remaining}
     ).execute()
@@ -136,7 +142,13 @@ def calculate_summary(period):
         if len(row) < 4:
             continue
 
-        date, type_tx, amount = row[0], row[1], int(row[2])
+        date = str(row[0]).strip()
+        type_tx = str(row[1]).strip().lower()
+
+        try:
+            amount = int(float(row[2]))
+        except:
+            continue
 
         match = (
             (period == "today" and date.startswith(today)) or
@@ -147,53 +159,71 @@ def calculate_summary(period):
         if not match:
             continue
 
-        if type_tx == "Income":
+        if type_tx == "income":
             income += amount
-        elif type_tx == "Expense":
+        elif type_tx == "expense":
             expense += amount
 
     balance = income - expense
     return income, expense, balance
 
 # ================= FLUSH =================
-def flush_income_today():
-    _flush_type_today("Income")
-
-def flush_expense_today():
-    _flush_type_today("Expense")
-
-def _flush_type_today(type_tx):
+def flush_type_today(type_tx):
     rows = get_transactions()
+    if not rows:
+        return
+
     today = now_wib().strftime("%Y-%m-%d")
-    remaining = [rows[0]]
+    type_tx = type_tx.lower()
+
+    remaining = [normalize_row(rows[0])]
 
     for row in rows[1:]:
-        if row[1] == type_tx and row[0].startswith(today):
+        row = normalize_row(row)
+        date = str(row[0]).strip()
+        row_type = str(row[1]).strip().lower()
+
+        if row_type == type_tx and date.startswith(today):
             continue
+
         remaining.append(row)
 
     service = get_service()
+    service.spreadsheets().values().clear(
+        spreadsheetId=SHEET_ID,
+        range="Sheet1!A:Z"
+    ).execute()
+
     service.spreadsheets().values().update(
         spreadsheetId=SHEET_ID,
-        range="Sheet1!A:D",
+        range="Sheet1!A1",
         valueInputOption="RAW",
         body={"values": remaining}
     ).execute()
 
 def flush_month():
     rows = get_transactions()
+    if not rows:
+        return
+
     month = now_wib().strftime("%Y-%m")
-    remaining = [rows[0]]
+    remaining = [normalize_row(rows[0])]
 
     for row in rows[1:]:
+        row = normalize_row(row)
         if row[0].startswith(month):
             continue
         remaining.append(row)
 
     service = get_service()
+    service.spreadsheets().values().clear(
+        spreadsheetId=SHEET_ID,
+        range="Sheet1!A:Z"
+    ).execute()
+
     service.spreadsheets().values().update(
         spreadsheetId=SHEET_ID,
-        range="Sheet1!A:D",
+        range="Sheet1!A1",
         valueInputOption="RAW",
         body={"values": remaining}
     ).execute()
@@ -202,7 +232,7 @@ def flush_all():
     service = get_service()
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
-        range="Sheet1!A2:D"
+        range="Sheet1!A:Z"
     ).execute()
 
 # ================= TELEGRAM =================
@@ -276,7 +306,7 @@ class handler(BaseHTTPRequestHandler):
             if state and state.get("step") == "await_delete_category":
                 match = re.match(r'del\s+"(.+)"', text, re.IGNORECASE)
                 if not match:
-                    send(chat_id, 'Format salah.\nGunakan: del "nama_category"')
+                    send(chat_id, 'Gunakan format: del "nama_category"')
                 else:
                     name = match.group(1)
                     if delete_category(name):
@@ -307,19 +337,17 @@ class handler(BaseHTTPRequestHandler):
 
             if text == "+ Add Category":
                 user_states[chat_id] = {"step": "manage_add_category"}
-                send(chat_id,
-                     'Type new category in format:\nIncome: Salary\nExpense: Food')
+                send(chat_id, 'Format: Income: Salary')
                 self.send_response(200); self.end_headers(); return
 
             if text == "Delete Category":
                 user_states[chat_id] = {"step": "await_delete_category"}
-                send(chat_id,
-                     'Type category to delete using:\ndel "category_name"')
+                send(chat_id, 'Gunakan: del "category_name"')
                 self.send_response(200); self.end_headers(); return
 
             if state and state.get("step") == "manage_add_category":
                 if ":" not in text:
-                    send(chat_id, 'Format salah. Gunakan: Income: Nama')
+                    send(chat_id, "Format salah.")
                 else:
                     type_tx, name = text.split(":", 1)
                     type_tx = type_tx.strip()
@@ -328,8 +356,6 @@ class handler(BaseHTTPRequestHandler):
                         add_category(type_tx, name)
                         send(chat_id, "Category added.", main_kb())
                         user_states.pop(chat_id, None)
-                    else:
-                        send(chat_id, "Type harus Income atau Expense.")
                 self.send_response(200); self.end_headers(); return
 
             # FLUSH
@@ -338,12 +364,12 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200); self.end_headers(); return
 
             if text == "Flush Income Today":
-                flush_income_today()
+                flush_type_today("Income")
                 send(chat_id, "Income today deleted.", main_kb())
                 self.send_response(200); self.end_headers(); return
 
             if text == "Flush Expense Today":
-                flush_expense_today()
+                flush_type_today("Expense")
                 send(chat_id, "Expense today deleted.", main_kb())
                 self.send_response(200); self.end_headers(); return
 
@@ -354,7 +380,7 @@ class handler(BaseHTTPRequestHandler):
 
             if text == "Flush All":
                 flush_all()
-                send(chat_id, "All transactions deleted.", main_kb())
+                send(chat_id, "All deleted.", main_kb())
                 self.send_response(200); self.end_headers(); return
 
             # RECAP
@@ -394,7 +420,7 @@ class handler(BaseHTTPRequestHandler):
             if state and state.get("step") == "category":
                 if text == "+ Add Category":
                     user_states[chat_id]["step"] = "new_category"
-                    send(chat_id, "Type new category name:")
+                    send(chat_id, "Type new category:")
                 else:
                     user_states[chat_id]["category"] = text
                     user_states[chat_id]["step"] = "amount"
