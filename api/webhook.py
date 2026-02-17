@@ -22,18 +22,18 @@ def now_wib():
     return datetime.now(timezone(timedelta(hours=7)))
 
 # ================= FORMAT =================
-def format_eur(amount):
-    return f"{amount:,.0f} €"
+def format_currency(amount):
+    return f"€{amount:,.0f}"
 
 def balance_message(balance):
     if balance >= 0:
         if balance >= 1000000:
-            return f"{format_eur(balance)} 🎉 (Excellent!)"
-        return f"{format_eur(balance)} 💰 (Good Job!)"
+            return f"{format_currency(balance)} 🎉 (Excellent!)"
+        return f"{format_currency(balance)} 💰 (Good Job!)"
     else:
         if abs(balance) >= 1000000:
-            return f"{format_eur(balance)} 🚨 (Debt Alert!)"
-        return f"{format_eur(balance)} ⚠️ (Be careful!)"
+            return f"{format_currency(balance)} 🚨 (Debt Alert!)"
+        return f"{format_currency(balance)} ⚠️ (Be careful!)"
 
 # ================= GOOGLE =================
 def get_service():
@@ -95,6 +95,7 @@ def delete_category(name):
         return False
 
     service = get_service()
+
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
         range="Categories!A2:B"
@@ -168,22 +169,6 @@ def calculate_summary(period):
     return income, expense, balance
 
 # ================= FLUSH =================
-def rewrite_sheet(remaining_rows):
-    service = get_service()
-
-    service.spreadsheets().values().clear(
-        spreadsheetId=SHEET_ID,
-        range="Sheet1!A2:D"
-    ).execute()
-
-    if len(remaining_rows) > 1:
-        service.spreadsheets().values().update(
-            spreadsheetId=SHEET_ID,
-            range="Sheet1!A2",
-            valueInputOption="RAW",
-            body={"values": remaining_rows[1:]}
-        ).execute()
-
 def flush_type_today(type_tx):
     rows = get_transactions()
     if not rows:
@@ -204,7 +189,20 @@ def flush_type_today(type_tx):
 
         remaining.append(row)
 
-    rewrite_sheet(remaining)
+    service = get_service()
+
+    service.spreadsheets().values().clear(
+        spreadsheetId=SHEET_ID,
+        range="Sheet1!A2:D"
+    ).execute()
+
+    if len(remaining) > 1:
+        service.spreadsheets().values().update(
+            spreadsheetId=SHEET_ID,
+            range="Sheet1!A1",
+            valueInputOption="RAW",
+            body={"values": remaining}
+        ).execute()
 
 def flush_month():
     rows = get_transactions()
@@ -220,7 +218,20 @@ def flush_month():
             continue
         remaining.append(row)
 
-    rewrite_sheet(remaining)
+    service = get_service()
+
+    service.spreadsheets().values().clear(
+        spreadsheetId=SHEET_ID,
+        range="Sheet1!A2:D"
+    ).execute()
+
+    if len(remaining) > 1:
+        service.spreadsheets().values().update(
+            spreadsheetId=SHEET_ID,
+            range="Sheet1!A1",
+            valueInputOption="RAW",
+            body={"values": remaining}
+        ).execute()
 
 def flush_all():
     service = get_service()
@@ -247,6 +258,18 @@ def other_kb():
                          ["Back"]],
             "resize_keyboard": True}
 
+def manage_kb():
+    return {"keyboard": [["+ Add Category"],
+                         ["Delete Category"],
+                         ["Back"]],
+            "resize_keyboard": True}
+
+def category_kb(type_tx):
+    categories = get_categories().get(type_tx, [])
+    return {"keyboard": [[c] for c in categories] +
+                        [["+ Add Category"], ["Back"]],
+            "resize_keyboard": True}
+
 def flush_kb():
     return {"keyboard": [["Flush Income Today"],
                          ["Flush Expense Today"],
@@ -255,7 +278,6 @@ def flush_kb():
                          ["Back"]],
             "resize_keyboard": True}
 
-# ================= QUICK ENTRY =================
 def parse_quick(text):
     match = re.match(r"^([+-]?)(\d+)\s+(.+)$", text.strip())
     if not match:
@@ -282,30 +304,87 @@ class handler(BaseHTTPRequestHandler):
             if user_id not in ALLOWED_USERS:
                 self.send_response(200); self.end_headers(); return
 
-            # FLUSH COMMANDS
+            state = user_states.get(chat_id)
+
+            if text == "/start":
+                send(chat_id, "Main Menu:", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Other":
+                send(chat_id, "Choose:", other_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Back":
+                user_states.pop(chat_id, None)
+                send(chat_id, "Main Menu:", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush Menu":
+                send(chat_id, "Choose:", flush_kb())
+                self.send_response(200); self.end_headers(); return
+
             if text == "Flush Income Today":
                 flush_type_today("Income")
                 send(chat_id, "Income today deleted.", main_kb())
+                self.send_response(200); self.end_headers(); return
 
-            elif text == "Flush Expense Today":
+            if text == "Flush Expense Today":
                 flush_type_today("Expense")
                 send(chat_id, "Expense today deleted.", main_kb())
+                self.send_response(200); self.end_headers(); return
 
-            elif text == "Flush Month":
+            if text == "Flush Month":
                 flush_month()
                 send(chat_id, "This month deleted.", main_kb())
+                self.send_response(200); self.end_headers(); return
 
-            elif text == "Flush All":
+            if text == "Flush All":
                 flush_all()
-                send(chat_id, "All deleted (header preserved).", main_kb())
+                send(chat_id, "All deleted.", main_kb())
+                self.send_response(200); self.end_headers(); return
 
-            self.send_response(200)
-            self.end_headers()
+            if text == "Today":
+                income, expense, balance = calculate_summary("today")
+                send(chat_id,
+                     f"Today\nIncome: {format_currency(income)}\n"
+                     f"Expense: {format_currency(expense)}\n"
+                     f"Balance: {balance_message(balance)}",
+                     other_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "This Month":
+                income, expense, balance = calculate_summary("month")
+                send(chat_id,
+                     f"This Month\nIncome: {format_currency(income)}\n"
+                     f"Expense: {format_currency(expense)}\n"
+                     f"Balance: {balance_message(balance)}",
+                     other_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "All":
+                income, expense, balance = calculate_summary("all")
+                send(chat_id,
+                     f"All\nIncome: {format_currency(income)}\n"
+                     f"Expense: {format_currency(expense)}\n"
+                     f"Balance: {balance_message(balance)}",
+                     other_kb())
+                self.send_response(200); self.end_headers(); return
+
+            quick = parse_quick(text)
+            if quick:
+                type_tx, amount, category = quick
+                add_transaction(type_tx, amount, category)
+                send(chat_id, "Saved.", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            send(chat_id, "Main Menu:", main_kb())
+            self.send_response(200); self.end_headers(); return
 
         except Exception as e:
             print("ERROR:", e)
-            self.send_response(200)
-            self.end_headers()
+
+        self.send_response(200)
+        self.end_headers()
 
     def do_GET(self):
         self.send_response(200)
