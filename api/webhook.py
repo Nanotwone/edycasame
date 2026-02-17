@@ -7,7 +7,6 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from datetime import datetime, timezone, timedelta
 
-# ================= ENV =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 SHEET_ID = os.environ.get("SHEET_ID")
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
@@ -17,11 +16,9 @@ ALLOWED_USERS = [int(x) for x in allowed_raw.split(",") if x.strip().isdigit()]
 
 user_states = {}
 
-# ================= TIME =================
 def now_wib():
     return datetime.now(timezone(timedelta(hours=7)))
 
-# ================= FORMAT =================
 def format_currency(amount):
     return f"€{amount:,.0f}"
 
@@ -35,7 +32,6 @@ def balance_message(balance):
             return f"{format_currency(balance)} 🚨 (Debt Alert!)"
         return f"{format_currency(balance)} ⚠️ (Be careful!)"
 
-# ================= GOOGLE =================
 def get_service():
     credentials_info = json.loads(GOOGLE_CREDENTIALS)
     credentials = service_account.Credentials.from_service_account_info(
@@ -58,7 +54,6 @@ def normalize_row(row):
         clean.append("")
     return clean
 
-# ================= CATEGORY =================
 def get_categories():
     rows = get_sheet("Categories!A:B")
     data = {"Income": [], "Expense": []}
@@ -95,7 +90,6 @@ def delete_category(name):
         return False
 
     service = get_service()
-
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
         range="Categories!A2:B"
@@ -110,7 +104,6 @@ def delete_category(name):
 
     return True
 
-# ================= TRANSACTION =================
 def add_transaction(type_tx, amount, category):
     service = get_service()
     service.spreadsheets().values().append(
@@ -128,11 +121,9 @@ def add_transaction(type_tx, amount, category):
 def get_transactions():
     return get_sheet("Sheet1!A:D")
 
-# ================= SUMMARY =================
 def calculate_summary(period):
     rows = get_transactions()
     now = now_wib()
-
     today = now.strftime("%Y-%m-%d")
     month = now.strftime("%Y-%m")
 
@@ -168,7 +159,6 @@ def calculate_summary(period):
     balance = income - expense
     return income, expense, balance
 
-# ================= FLUSH =================
 def flush_type_today(type_tx):
     rows = get_transactions()
     if not rows:
@@ -176,21 +166,17 @@ def flush_type_today(type_tx):
 
     today = now_wib().strftime("%Y-%m-%d")
     type_tx = type_tx.lower()
-
     remaining = [normalize_row(rows[0])]
 
     for row in rows[1:]:
         row = normalize_row(row)
         date = str(row[0]).strip()
         row_type = str(row[1]).strip().lower()
-
         if row_type == type_tx and date.startswith(today):
             continue
-
         remaining.append(row)
 
     service = get_service()
-
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
         range="Sheet1!A2:D"
@@ -219,7 +205,6 @@ def flush_month():
         remaining.append(row)
 
     service = get_service()
-
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
         range="Sheet1!A2:D"
@@ -240,7 +225,6 @@ def flush_all():
         range="Sheet1!A2:D"
     ).execute()
 
-# ================= TELEGRAM =================
 def send(chat_id, text, keyboard=None):
     payload = {"chat_id": chat_id, "text": text}
     if keyboard:
@@ -287,7 +271,6 @@ def parse_quick(text):
     type_tx = "Income" if sign == "+" else "Expense"
     return type_tx, amount, category
 
-# ================= HANDLER =================
 class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
@@ -306,6 +289,19 @@ class handler(BaseHTTPRequestHandler):
 
             state = user_states.get(chat_id)
 
+            if state and state.get("step") == "await_delete_category":
+                match = re.match(r'del\s+"(.+)"', text, re.IGNORECASE)
+                if not match:
+                    send(chat_id, 'Gunakan format: del "nama_category"')
+                else:
+                    name = match.group(1)
+                    if delete_category(name):
+                        send(chat_id, f'Category "{name}" deleted.', main_kb())
+                    else:
+                        send(chat_id, f'Category "{name}" not found.', main_kb())
+                    user_states.pop(chat_id, None)
+                self.send_response(200); self.end_headers(); return
+
             if text == "/start":
                 send(chat_id, "Main Menu:", main_kb())
                 self.send_response(200); self.end_headers(); return
@@ -317,6 +313,33 @@ class handler(BaseHTTPRequestHandler):
             if text == "Back":
                 user_states.pop(chat_id, None)
                 send(chat_id, "Main Menu:", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Manage Category":
+                send(chat_id, "Manage categories:", manage_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "+ Add Category":
+                user_states[chat_id] = {"step": "manage_add_category"}
+                send(chat_id, 'Format: Income: Salary')
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Delete Category":
+                user_states[chat_id] = {"step": "await_delete_category"}
+                send(chat_id, 'Gunakan: del "category_name"')
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "manage_add_category":
+                if ":" not in text:
+                    send(chat_id, "Format salah.")
+                else:
+                    type_tx, name = text.split(":", 1)
+                    type_tx = type_tx.strip()
+                    name = name.strip()
+                    if type_tx in ["Income", "Expense"]:
+                        add_category(type_tx, name)
+                        send(chat_id, "Category added.", main_kb())
+                        user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
             if text == "Flush Menu":
@@ -368,6 +391,36 @@ class handler(BaseHTTPRequestHandler):
                      f"Expense: {format_currency(expense)}\n"
                      f"Balance: {balance_message(balance)}",
                      other_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text in ["Income", "Expense"]:
+                user_states[chat_id] = {"step": "category", "type": text}
+                send(chat_id, "Select category:", category_kb(text))
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "category":
+                if text == "+ Add Category":
+                    user_states[chat_id]["step"] = "new_category"
+                    send(chat_id, "Type new category:")
+                else:
+                    user_states[chat_id]["category"] = text
+                    user_states[chat_id]["step"] = "amount"
+                    send(chat_id, "Enter amount:")
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "new_category":
+                add_category(state["type"], text)
+                user_states[chat_id]["step"] = "category"
+                send(chat_id, "Category added:", category_kb(state["type"]))
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "amount":
+                if text.isdigit():
+                    add_transaction(state["type"], int(text), state["category"])
+                    send(chat_id, "Saved.", main_kb())
+                    user_states.pop(chat_id, None)
+                else:
+                    send(chat_id, "Numbers only.")
                 self.send_response(200); self.end_headers(); return
 
             quick = parse_quick(text)
