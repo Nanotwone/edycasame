@@ -2,8 +2,12 @@ import json
 
 def handler(request):
     if request.method == "POST":
-        data = request.get_json()
-        print(data)
+        try:
+            data = request.json()
+            print(data)
+        except:
+            pass
+
         return {
             "statusCode": 200,
             "body": json.dumps({"status": "ok"})
@@ -13,4 +17,3 @@ def handler(request):
         "statusCode": 200,
         "body": "Bot is running"
     }
-
