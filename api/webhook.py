@@ -8,25 +8,22 @@ from googleapiclient.discovery import build
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
-# ================= ENV =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 SHEET_ID = os.environ.get("SHEET_ID")
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
 ALLOWED_USERS = list(map(int, os.environ.get("ALLOWED_USERS").split(",")))
 
-# ================= STATE =================
 user_states = {}
 
-# ================= TIMEZONE WIB =================
+# ================= TIME =================
 def now_wib():
     return datetime.now(timezone(timedelta(hours=7)))
 
-# ================= FORMAT =================
 def format_yen(amount):
     return f"¥{amount:,.0f}"
 
-# ================= GOOGLE SERVICE =================
-def get_sheets_service():
+# ================= GOOGLE =================
+def get_service():
     credentials_info = json.loads(GOOGLE_CREDENTIALS)
     credentials = service_account.Credentials.from_service_account_info(
         credentials_info,
@@ -34,9 +31,8 @@ def get_sheets_service():
     )
     return build("sheets", "v4", credentials=credentials)
 
-# ================= SHEET =================
-def get_all_rows():
-    service = get_sheets_service()
+def get_rows():
+    service = get_service()
     result = service.spreadsheets().values().get(
         spreadsheetId=SHEET_ID,
         range="Sheet1!A:D"
@@ -44,8 +40,8 @@ def get_all_rows():
     return result.get("values", [])
 
 # ================= TRANSACTION =================
-def append_transaction(type_tx, amount, category):
-    service = get_sheets_service()
+def add_transaction(type_tx, amount, category):
+    service = get_service()
     values = [[
         now_wib().strftime("%Y-%m-%d %H:%M:%S"),
         type_tx,
@@ -59,152 +55,14 @@ def append_transaction(type_tx, amount, category):
         body={"values": values}
     ).execute()
 
-def flush_all():
-    service = get_sheets_service()
-    service.spreadsheets().values().clear(
-        spreadsheetId=SHEET_ID,
-        range="Sheet1!A2:D"
-    ).execute()
-
-def delete_by_period(period):
-    rows = get_all_rows()
-    if not rows:
-        return
-
-    service = get_sheets_service()
-    now = now_wib()
-
-    today_str = now.strftime("%Y-%m-%d")
-    month_str = now.strftime("%Y-%m")
-    year_str = now.strftime("%Y")
-
-    remaining = [rows[0]]
-
-    for row in rows[1:]:
-        if len(row) < 4:
-            continue
-
-        row_date = row[0].strip()
-
-        match = (
-            (period == "today" and row_date.startswith(today_str)) or
-            (period == "month" and row_date.startswith(month_str)) or
-            (period == "year" and row_date.startswith(year_str))
-        )
-
-        if match:
-            continue
-
-        remaining.append(row)
-
-    service.spreadsheets().values().update(
-        spreadsheetId=SHEET_ID,
-        range="Sheet1!A:D",
-        valueInputOption="RAW",
-        body={"values": remaining}
-    ).execute()
-
-def delete_by_type_and_period(type_tx, period):
-    rows = get_all_rows()
-    if not rows:
-        return
-
-    service = get_sheets_service()
-    now = now_wib()
-
-    today_str = now.strftime("%Y-%m-%d")
-    month_str = now.strftime("%Y-%m")
-    year_str = now.strftime("%Y")
-
-    remaining = [rows[0]]
-
-    for row in rows[1:]:
-        if len(row) < 4:
-            continue
-
-        row_date = row[0].strip()
-        row_type = row[1].strip()
-
-        match_period = (
-            (period == "today" and row_date.startswith(today_str)) or
-            (period == "month" and row_date.startswith(month_str)) or
-            (period == "year" and row_date.startswith(year_str))
-        )
-
-        if row_type == type_tx and match_period:
-            continue
-
-        remaining.append(row)
-
-    service.spreadsheets().values().update(
-        spreadsheetId=SHEET_ID,
-        range="Sheet1!A:D",
-        valueInputOption="RAW",
-        body={"values": remaining}
-    ).execute()
-
-# ================= CATEGORY =================
-def get_categories():
-    service = get_sheets_service()
-    try:
-        result = service.spreadsheets().values().get(
-            spreadsheetId=SHEET_ID,
-            range="Categories!A:B"
-        ).execute()
-        rows = result.get("values", [])
-    except:
-        rows = []
-
-    data = {"Pemasukan": [], "Pengeluaran": []}
-
-    for row in rows[1:]:
-        if len(row) >= 2:
-            data[row[0].strip()].append(row[1].strip())
-
-    return data
-
-def add_category(type_tx, category):
-    service = get_sheets_service()
-    service.spreadsheets().values().append(
-        spreadsheetId=SHEET_ID,
-        range="Categories!A:B",
-        valueInputOption="RAW",
-        body={"values": [[type_tx, category]]}
-    ).execute()
-
-def delete_category(type_tx, category):
-    service = get_sheets_service()
-    result = service.spreadsheets().values().get(
-        spreadsheetId=SHEET_ID,
-        range="Categories!A:B"
-    ).execute()
-
-    rows = result.get("values", [])
-    if not rows:
-        return
-
-    remaining = [rows[0]]
-
-    for row in rows[1:]:
-        if row[0].strip() == type_tx and row[1].strip() == category:
-            continue
-        remaining.append(row)
-
-    service.spreadsheets().values().update(
-        spreadsheetId=SHEET_ID,
-        range="Categories!A:B",
-        valueInputOption="RAW",
-        body={"values": remaining}
-    ).execute()
-
 # ================= SUMMARY =================
-def calculate_summary(period="today"):
-    rows = get_all_rows()
+def calculate_summary(period):
+    rows = get_rows()
     now = now_wib()
 
-    today_str = now.strftime("%Y-%m-%d")
-    month_str = now.strftime("%Y-%m")
-    year_str = now.strftime("%Y")
+    today = now.strftime("%Y-%m-%d")
+    month = now.strftime("%Y-%m")
+    year = now.strftime("%Y")
 
     income = 0
     expense = 0
@@ -215,115 +73,61 @@ def calculate_summary(period="today"):
         if len(row) < 4:
             continue
 
-        row_date = row[0].strip()
-        type_tx = row[1]
+        date = row[0].strip()
+        type_tx = row[1].strip()
         amount = int(row[2])
         category = row[3]
 
         match = (
-            (period == "today" and row_date.startswith(today_str)) or
-            (period == "month" and row_date.startswith(month_str)) or
-            (period == "year" and row_date.startswith(year_str)) or
+            (period == "today" and date.startswith(today)) or
+            (period == "month" and date.startswith(month)) or
+            (period == "year" and date.startswith(year)) or
             (period == "all")
         )
 
         if not match:
             continue
 
-        if type_tx == "Pemasukan":
+        if type_tx == "Income":
             income += amount
             cat_income[category] += amount
-        else:
+        elif type_tx == "Expense":
             expense += amount
             cat_expense[category] += amount
 
     return income, expense, cat_income, cat_expense
 
 # ================= TELEGRAM =================
-def send_message(chat_id, text, keyboard=None):
+def send(chat_id, text, keyboard=None):
     payload = {"chat_id": chat_id, "text": text}
     if keyboard:
         payload["reply_markup"] = keyboard
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
 
-def main_keyboard():
+def main_kb():
     return {
-        "keyboard": [
-            ["Pemasukan", "Pengeluaran"],
-            ["Lain-lain"]
-        ],
+        "keyboard": [["Income", "Expense"], ["Other"]],
         "resize_keyboard": True
     }
 
-def other_keyboard():
+def other_kb():
     return {
         "keyboard": [
             ["Today", "Month", "Year"],
-            ["Top Expense", "Top Income"],
-            ["Kelola Kategori"],
-            ["Flush Menu"],
-            ["Kembali"]
+            ["Top Income", "Top Expense"],
+            ["Back"]
         ],
-        "resize_keyboard": True
-    }
-
-def flush_keyboard():
-    return {
-        "keyboard": [
-            ["Flush Today", "Flush Month"],
-            ["Flush Year", "Flush All"],
-            ["Flush Pemasukan"],
-            ["Flush Pengeluaran"],
-            ["Kembali"]
-        ],
-        "resize_keyboard": True
-    }
-
-def flush_type_period_keyboard(type_tx):
-    return {
-        "keyboard": [
-            [f"{type_tx} Today"],
-            [f"{type_tx} Month"],
-            [f"{type_tx} Year"],
-            ["Kembali"]
-        ],
-        "resize_keyboard": True
-    }
-
-def confirm_keyboard():
-    return {
-        "keyboard": [
-            ["YA Hapus"],
-            ["Batal"]
-        ],
-        "resize_keyboard": True
-    }
-
-def manage_category_keyboard():
-    return {
-        "keyboard": [
-            ["Lihat Kategori"],
-            ["Kembali"]
-        ],
-        "resize_keyboard": True
-    }
-
-def category_keyboard(type_tx):
-    categories = get_categories()
-    return {
-        "keyboard": [[cat] for cat in categories.get(type_tx, [])] +
-                    [["+ Tambah Kategori"], ["Kembali"]],
         "resize_keyboard": True
     }
 
 # ================= QUICK ENTRY =================
-def parse_quick_entry(text):
+def parse_quick(text):
     match = re.match(r"^([+-]?)(\d+)\s+(.+)$", text.strip())
     if not match:
         return None
     sign, amount, category = match.groups()
     amount = int(amount)
-    type_tx = "Pemasukan" if sign == "+" else "Pengeluaran"
+    type_tx = "Income" if sign == "+" else "Expense"
     return type_tx, amount, category
 
 # ================= HANDLER =================
@@ -344,186 +148,60 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200); self.end_headers(); return
 
             if text == "/start":
-                user_states.pop(chat_id, None)
-                send_message(chat_id, "Menu utama:", main_keyboard())
+                send(chat_id, "Main menu:", main_kb())
                 self.send_response(200); self.end_headers(); return
 
-            # ==== DELETE CATEGORY COMMAND ====
-            if text.lower().startswith("delete "):
-                category_name = text[7:].strip()
-                categories = get_categories()
-                found = False
-
-                for type_tx in ["Pemasukan", "Pengeluaran"]:
-                    if category_name in categories.get(type_tx, []):
-                        delete_category(type_tx, category_name)
-                        found = True
-                        break
-
-                if found:
-                    send_message(chat_id,
-                                 f"Kategori '{category_name}' berhasil dihapus.",
-                                 main_keyboard())
-                else:
-                    send_message(chat_id,
-                                 f"Kategori '{category_name}' tidak ditemukan.",
-                                 main_keyboard())
-
+            # QUICK ENTRY
+            quick = parse_quick(text)
+            if quick:
+                type_tx, amount, category = quick
+                add_transaction(type_tx, amount, category)
+                send(chat_id,
+                     f"Saved {type_tx} {format_yen(amount)} for {category}",
+                     main_kb())
                 self.send_response(200); self.end_headers(); return
 
-            state = user_states.get(chat_id)
-
-            # ==== FLUSH LOGIC DULU (PRIORITAS) ====
-            if text == "Flush Menu":
-                send_message(chat_id, "Pilih jenis flush:", flush_keyboard())
+            # MENU
+            if text == "Other":
+                send(chat_id, "Choose:", other_kb())
                 self.send_response(200); self.end_headers(); return
 
-            if text == "Flush Today":
-                delete_by_period("today")
-                send_message(chat_id, "Semua data Today dihapus.", main_keyboard())
+            if text == "Back":
+                send(chat_id, "Main menu:", main_kb())
                 self.send_response(200); self.end_headers(); return
 
-            if text == "Flush Month":
-                delete_by_period("month")
-                send_message(chat_id, "Semua data Month dihapus.", main_keyboard())
+            # RECAP
+            if text in ["Today", "Month", "Year"]:
+                income, expense, _, _ = calculate_summary(text.lower())
+                balance = income - expense
+                send(chat_id,
+                     f"📊 {text}\n\n"
+                     f"Income: {format_yen(income)}\n"
+                     f"Expense: {format_yen(expense)}\n"
+                     f"Balance: {format_yen(balance)}",
+                     other_kb())
                 self.send_response(200); self.end_headers(); return
 
-            if text == "Flush Year":
-                delete_by_period("year")
-                send_message(chat_id, "Semua data Year dihapus.", main_keyboard())
+            # TOP
+            if text == "Top Income":
+                _, _, cat_income, _ = calculate_summary("all")
+                top = sorted(cat_income.items(), key=lambda x: x[1], reverse=True)[:3]
+                msg = "💰 Top Income:\n\n"
+                for i, (cat, amt) in enumerate(top, 1):
+                    msg += f"{i}. {cat} - {format_yen(amt)}\n"
+                send(chat_id, msg, other_kb())
                 self.send_response(200); self.end_headers(); return
 
-            if text == "Flush All":
-                flush_all()
-                send_message(chat_id, "Semua data dihapus.", main_keyboard())
+            if text == "Top Expense":
+                _, _, _, cat_expense = calculate_summary("all")
+                top = sorted(cat_expense.items(), key=lambda x: x[1], reverse=True)[:3]
+                msg = "🔥 Top Expense:\n\n"
+                for i, (cat, amt) in enumerate(top, 1):
+                    msg += f"{i}. {cat} - {format_yen(amt)}\n"
+                send(chat_id, msg, other_kb())
                 self.send_response(200); self.end_headers(); return
 
-            if text == "Flush Pemasukan":
-                user_states[chat_id] = {"step": "flush_type", "type": "Pemasukan"}
-                send_message(chat_id, "Pilih periode:", flush_type_period_keyboard("Pemasukan"))
-                self.send_response(200); self.end_headers(); return
-
-            if text == "Flush Pengeluaran":
-                user_states[chat_id] = {"step": "flush_type", "type": "Pengeluaran"}
-                send_message(chat_id, "Pilih periode:", flush_type_period_keyboard("Pengeluaran"))
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "flush_type":
-                if text.endswith("Today"):
-                    period = "today"
-                elif text.endswith("Month"):
-                    period = "month"
-                elif text.endswith("Year"):
-                    period = "year"
-                elif text == "Kembali":
-                    user_states.pop(chat_id, None)
-                    send_message(chat_id, "Menu utama:", main_keyboard())
-                    self.send_response(200); self.end_headers(); return
-                else:
-                    return
-
-                user_states[chat_id] = {
-                    "step": "flush_confirm",
-                    "type": state["type"],
-                    "period": period
-                }
-
-                send_message(chat_id,
-                             f"Yakin hapus {state['type']} {period.capitalize()}?",
-                             confirm_keyboard())
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "flush_confirm":
-                if text == "YA Hapus":
-                    delete_by_type_and_period(state["type"], state["period"])
-                    send_message(chat_id,
-                                 f"{state['type']} {state['period'].capitalize()} dihapus.",
-                                 main_keyboard())
-                else:
-                    send_message(chat_id, "Dibatalkan.", main_keyboard())
-
-                user_states.pop(chat_id, None)
-                self.send_response(200); self.end_headers(); return
-
-            # ==== QUICK ENTRY ====
-            if state is None:
-                quick = parse_quick_entry(text)
-                if quick:
-                    type_tx, amount, category = quick
-                    append_transaction(type_tx, amount, category)
-                    send_message(chat_id,
-                                 f"⚡ {type_tx} {format_yen(amount)} untuk {category} disimpan.",
-                                 main_keyboard())
-                    self.send_response(200); self.end_headers(); return
-
-            # ==== WIZARD TRANSAKSI ====
-            if text in ["Pemasukan", "Pengeluaran"]:
-                user_states[chat_id] = {"step": "category", "type": text}
-                send_message(chat_id, "Pilih kategori:", category_keyboard(text))
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "category":
-                if text == "+ Tambah Kategori":
-                    user_states[chat_id]["step"] = "new_category"
-                    send_message(chat_id, "Ketik nama kategori baru:")
-                elif text == "Kembali":
-                    user_states.pop(chat_id, None)
-                    send_message(chat_id, "Menu utama:", main_keyboard())
-                else:
-                    user_states[chat_id]["category"] = text
-                    user_states[chat_id]["step"] = "amount"
-                    send_message(chat_id, "Nominal?")
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "new_category":
-                new_cat = text.strip()
-                type_tx = state["type"]
-                categories = get_categories()
-                if new_cat not in categories.get(type_tx, []):
-                    add_category(type_tx, new_cat)
-                user_states[chat_id]["step"] = "category"
-                send_message(chat_id, "Pilih kategori:", category_keyboard(type_tx))
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "amount":
-                if not text.isdigit():
-                    send_message(chat_id, "Masukkan angka saja.")
-                else:
-                    amount = int(text)
-                    append_transaction(state["type"], amount, state["category"])
-                    send_message(chat_id,
-                                 f"✔️ {state['type']} {format_yen(amount)} untuk {state['category']} disimpan.",
-                                 main_keyboard())
-                    user_states.pop(chat_id, None)
-                self.send_response(200); self.end_headers(); return
-
-            # ==== MENU ====
-            if text == "Lain-lain":
-                send_message(chat_id, "Pilih fitur:", other_keyboard())
-                self.send_response(200); self.end_headers(); return
-
-            if text == "Kelola Kategori":
-                send_message(chat_id, "Pilih:", manage_category_keyboard())
-                self.send_response(200); self.end_headers(); return
-
-            if text == "Lihat Kategori":
-                categories = get_categories()
-                msg = "📂 Daftar Kategori:\n\nPemasukan:\n"
-                for c in categories["Pemasukan"]:
-                    msg += f"- {c}\n"
-                msg += "\nPengeluaran:\n"
-                for c in categories["Pengeluaran"]:
-                    msg += f"- {c}\n"
-                msg += "\n\nUntuk hapus ketik:\ndelete nama_kategori"
-                send_message(chat_id, msg, manage_category_keyboard())
-                self.send_response(200); self.end_headers(); return
-
-            if text == "Kembali":
-                user_states.pop(chat_id, None)
-                send_message(chat_id, "Menu utama:", main_keyboard())
-                self.send_response(200); self.end_headers(); return
-
-            send_message(chat_id, "Menu utama:", main_keyboard())
+            send(chat_id, "Main menu:", main_kb())
             self.send_response(200); self.end_headers(); return
 
         except Exception as e:
