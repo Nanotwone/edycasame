@@ -30,7 +30,7 @@ def get_sheets_service():
     )
     return build("sheets", "v4", credentials=credentials)
 
-# ================= DATA TRANSACTION =================
+# ================= TRANSACTION =================
 def get_all_rows():
     service = get_sheets_service()
     result = service.spreadsheets().values().get(
@@ -239,7 +239,7 @@ class handler(BaseHTTPRequestHandler):
             data = json.loads(body)
             message = data.get("message", {})
             chat_id = message.get("chat", {}).get("id")
-            text = message.get("text")
+            text = message.get("text", "").strip()
             user_id = message.get("from", {}).get("id")
 
             if user_id not in ALLOWED_USERS:
@@ -252,34 +252,44 @@ class handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
 
-            state = user_states.get(chat_id)
-
-            # ===== QUICK ENTRY =====
-            quick = parse_quick_entry(text)
-            if quick:
-                type_tx, amount, category = quick
-                append_transaction(type_tx, amount, category)
-                send_message(
-                    chat_id,
-                    f"⚡ {type_tx} {format_yen(amount)} untuk {category} disimpan.",
-                    main_keyboard()
-                )
+            # ===== START =====
+            if text == "/start":
+                user_states.pop(chat_id, None)
+                send_message(chat_id, "Menu utama:", main_keyboard())
                 self.send_response(200)
                 self.end_headers()
                 return
 
+            state = user_states.get(chat_id)
+
+            # ===== QUICK ENTRY (hanya jika tidak wizard) =====
+            if state is None:
+                quick = parse_quick_entry(text)
+                if quick:
+                    type_tx, amount, category = quick
+                    append_transaction(type_tx, amount, category)
+                    send_message(
+                        chat_id,
+                        f"⚡ {type_tx} {format_yen(amount)} untuk {category} disimpan.",
+                        main_keyboard()
+                    )
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+
             # ===== MENU =====
             if text == "Lain-lain":
                 send_message(chat_id, "Pilih fitur:", other_keyboard())
+                self.send_response(200); self.end_headers(); return
 
-            elif text == "Kembali":
+            if text == "Kembali":
+                user_states.pop(chat_id, None)
                 send_message(chat_id, "Menu utama:", main_keyboard())
+                self.send_response(200); self.end_headers(); return
 
-            elif text in ["Today", "Month", "Year"]:
-                period = text.lower()
-                income, expense, _, _ = calculate_summary(period)
+            if text in ["Today", "Month", "Year"]:
+                income, expense, _, _ = calculate_summary(text.lower())
                 balance = income - expense
-
                 send_message(
                     chat_id,
                     f"📊 Rekap {text}\n\n"
@@ -288,107 +298,59 @@ class handler(BaseHTTPRequestHandler):
                     f"Saldo: {format_yen(balance)}",
                     other_keyboard()
                 )
+                self.send_response(200); self.end_headers(); return
 
-            elif text == "Top Expense":
+            if text == "Top Expense":
                 _, _, _, cat_expense = calculate_summary("all")
                 top = sorted(cat_expense.items(), key=lambda x: x[1], reverse=True)[:3]
                 msg = "🔥 Top 3 Pengeluaran:\n\n"
                 for i, (cat, amt) in enumerate(top, 1):
                     msg += f"{i}. {cat} - {format_yen(amt)}\n"
                 send_message(chat_id, msg, other_keyboard())
+                self.send_response(200); self.end_headers(); return
 
-            elif text == "Top Income":
+            if text == "Top Income":
                 _, _, cat_income, _ = calculate_summary("all")
                 top = sorted(cat_income.items(), key=lambda x: x[1], reverse=True)[:3]
                 msg = "💰 Top 3 Pemasukan:\n\n"
                 for i, (cat, amt) in enumerate(top, 1):
                     msg += f"{i}. {cat} - {format_yen(amt)}\n"
                 send_message(chat_id, msg, other_keyboard())
-
-            elif text == "Flush Menu":
-                send_message(chat_id, "Pilih jenis flush:", flush_keyboard())
-
-            elif text == "Flush Today":
-                user_states[chat_id] = {"step": "confirm_today"}
-                send_message(chat_id, "Ketik HARI untuk konfirmasi.")
-
-            elif state and state.get("step") == "confirm_today":
-                if text == "HARI":
-                    delete_by_period("today")
-                    send_message(chat_id, "Data hari ini dihapus.", main_keyboard())
-                else:
-                    send_message(chat_id, "Dibatalkan.", main_keyboard())
-                user_states[chat_id] = None
-
-            elif text == "Flush Month":
-                user_states[chat_id] = {"step": "confirm_month"}
-                send_message(chat_id, "Ketik BULAN untuk konfirmasi.")
-
-            elif state and state.get("step") == "confirm_month":
-                if text == "BULAN":
-                    delete_by_period("month")
-                    send_message(chat_id, "Data bulan ini dihapus.", main_keyboard())
-                else:
-                    send_message(chat_id, "Dibatalkan.", main_keyboard())
-                user_states[chat_id] = None
-
-            elif text == "Flush All":
-                user_states[chat_id] = {"step": "confirm_all"}
-                send_message(chat_id, "Ketik DELETE untuk konfirmasi.")
-
-            elif state and state.get("step") == "confirm_all":
-                if text == "DELETE":
-                    flush_all()
-                    send_message(chat_id, "Semua data berhasil dihapus.", main_keyboard())
-                else:
-                    send_message(chat_id, "Dibatalkan.", main_keyboard())
-                user_states[chat_id] = None
+                self.send_response(200); self.end_headers(); return
 
             # ===== WIZARD =====
-            elif text in ["Pemasukan", "Pengeluaran"]:
+            if text in ["Pemasukan", "Pengeluaran"]:
                 user_states[chat_id] = {"step": "category", "type": text}
                 send_message(chat_id, "Pilih kategori:", category_keyboard(text))
+                self.send_response(200); self.end_headers(); return
 
-            elif state and state.get("step") == "category":
+            if state and state.get("step") == "category":
                 if text == "+ Tambah Kategori":
                     user_states[chat_id]["step"] = "new_category"
                     send_message(chat_id, "Ketik nama kategori baru:")
-                    return
+                else:
+                    user_states[chat_id]["category"] = text
+                    user_states[chat_id]["step"] = "amount"
+                    send_message(chat_id, "Nominal?")
+                self.send_response(200); self.end_headers(); return
 
-                if text == "Kembali":
-                    send_message(chat_id, "Menu utama:", main_keyboard())
-                    user_states[chat_id] = None
-                    return
-
-                user_states[chat_id]["category"] = text
-                user_states[chat_id]["step"] = "amount"
-                send_message(chat_id, "Nominal?")
-
-            elif state and state.get("step") == "new_category":
+            if state and state.get("step") == "new_category":
                 new_cat = text.strip()
                 type_tx = state["type"]
-
                 categories = get_categories()
-                if new_cat in categories.get(type_tx, []):
-                    send_message(chat_id, "Kategori sudah ada.")
-                else:
+                if new_cat not in categories.get(type_tx, []):
                     add_category(type_tx, new_cat)
-                    send_message(chat_id, f"Kategori '{new_cat}' ditambahkan.")
-
                 user_states[chat_id]["step"] = "category"
                 send_message(chat_id, "Pilih kategori:", category_keyboard(type_tx))
+                self.send_response(200); self.end_headers(); return
 
-            elif state and state.get("step") == "amount":
+            if state and state.get("step") == "amount":
                 if not text.isdigit():
                     send_message(chat_id, "Masukkan angka saja.")
-                    return
+                    self.send_response(200); self.end_headers(); return
 
                 amount = int(text)
-                append_transaction(
-                    state["type"],
-                    amount,
-                    state["category"]
-                )
+                append_transaction(state["type"], amount, state["category"])
 
                 send_message(
                     chat_id,
@@ -396,13 +358,13 @@ class handler(BaseHTTPRequestHandler):
                     main_keyboard()
                 )
 
-                user_states[chat_id] = None
+                user_states.pop(chat_id, None)
+                self.send_response(200); self.end_headers(); return
 
-            else:
-                send_message(chat_id, "Pilih menu:", main_keyboard())
+            send_message(chat_id, "Pilih menu:", main_keyboard())
 
         except Exception as e:
-            print(e)
+            print("ERROR:", e)
 
         self.send_response(200)
         self.end_headers()
