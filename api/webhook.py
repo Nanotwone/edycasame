@@ -9,6 +9,8 @@ from datetime import datetime
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 SHEET_ID = os.environ.get("SHEET_ID")
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
+ALLOWED_USERS = [int(os.environ.get("ALLOWED_USERS"))]
+
 
 user_states = {}
 
