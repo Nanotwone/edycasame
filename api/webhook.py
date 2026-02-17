@@ -8,6 +8,7 @@ from googleapiclient.discovery import build
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
+# ================= ENV =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 SHEET_ID = os.environ.get("SHEET_ID")
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
@@ -31,38 +32,84 @@ def get_service():
     )
     return build("sheets", "v4", credentials=credentials)
 
-def get_rows():
+def get_sheet(range_name):
     service = get_service()
     result = service.spreadsheets().values().get(
         spreadsheetId=SHEET_ID,
-        range="Sheet1!A:D"
+        range=range_name
     ).execute()
     return result.get("values", [])
+
+# ================= CATEGORY =================
+def get_categories():
+    rows = get_sheet("Categories!A:B")
+    data = {"Income": [], "Expense": []}
+
+    for row in rows[1:]:
+        if len(row) >= 2:
+            data[row[0].strip()].append(row[1].strip())
+
+    return data
+
+def add_category(type_tx, category):
+    service = get_service()
+    service.spreadsheets().values().append(
+        spreadsheetId=SHEET_ID,
+        range="Categories!A:B",
+        valueInputOption="RAW",
+        body={"values": [[type_tx, category]]}
+    ).execute()
+
+def delete_category(category_name):
+    service = get_service()
+    rows = get_sheet("Categories!A:B")
+    if not rows:
+        return False
+
+    header = rows[0]
+    remaining = [header]
+    found = False
+
+    for row in rows[1:]:
+        if row[1].strip().lower() == category_name.lower():
+            found = True
+            continue
+        remaining.append(row)
+
+    service.spreadsheets().values().update(
+        spreadsheetId=SHEET_ID,
+        range="Categories!A:B",
+        valueInputOption="RAW",
+        body={"values": remaining}
+    ).execute()
+
+    return found
 
 # ================= TRANSACTION =================
 def add_transaction(type_tx, amount, category):
     service = get_service()
-    values = [[
-        now_wib().strftime("%Y-%m-%d %H:%M:%S"),
-        type_tx,
-        amount,
-        category
-    ]]
     service.spreadsheets().values().append(
         spreadsheetId=SHEET_ID,
         range="Sheet1!A:D",
         valueInputOption="RAW",
-        body={"values": values}
+        body={"values": [[
+            now_wib().strftime("%Y-%m-%d %H:%M:%S"),
+            type_tx,
+            amount,
+            category
+        ]]}
     ).execute()
+
+def get_transactions():
+    return get_sheet("Sheet1!A:D")
 
 # ================= SUMMARY =================
 def calculate_summary(period):
-    rows = get_rows()
+    rows = get_transactions()
     now = now_wib()
 
     today = now.strftime("%Y-%m-%d")
     month = now.strftime("%Y-%m")
-    year = now.strftime("%Y")
 
     income = 0
     expense = 0
@@ -73,15 +120,14 @@ def calculate_summary(period):
         if len(row) < 4:
             continue
 
-        date = row[0].strip()
-        type_tx = row[1].strip()
+        date = row[0]
+        type_tx = row[1]
         amount = int(row[2])
         category = row[3]
 
         match = (
             (period == "today" and date.startswith(today)) or
             (period == "month" and date.startswith(month)) or
-            (period == "year" and date.startswith(year)) or
             (period == "all")
         )
 
@@ -97,6 +143,59 @@ def calculate_summary(period):
 
     return income, expense, cat_income, cat_expense
 
+# ================= FLUSH =================
+def delete_by_type_and_period(type_tx, period):
+    rows = get_transactions()
+    service = get_service()
+    now = now_wib()
+
+    today = now.strftime("%Y-%m-%d")
+
+    remaining = [rows[0]]
+
+    for row in rows[1:]:
+        date = row[0]
+        row_type = row[1]
+
+        if period == "today" and row_type == type_tx and date.startswith(today):
+            continue
+
+        remaining.append(row)
+
+    service.spreadsheets().values().update(
+        spreadsheetId=SHEET_ID,
+        range="Sheet1!A:D",
+        valueInputOption="RAW",
+        body={"values": remaining}
+    ).execute()
+
+def delete_month():
+    rows = get_transactions()
+    service = get_service()
+    now = now_wib()
+    month = now.strftime("%Y-%m")
+
+    remaining = [rows[0]]
+
+    for row in rows[1:]:
+        if row[0].startswith(month):
+            continue
+        remaining.append(row)
+
+    service.spreadsheets().values().update(
+        spreadsheetId=SHEET_ID,
+        range="Sheet1!A:D",
+        valueInputOption="RAW",
+        body={"values": remaining}
+    ).execute()
+
+def flush_all():
+    service = get_service()
+    service.spreadsheets().values().clear(
+        spreadsheetId=SHEET_ID,
+        range="Sheet1!A2:D"
+    ).execute()
+
 # ================= TELEGRAM =================
 def send(chat_id, text, keyboard=None):
     payload = {"chat_id": chat_id, "text": text}
@@ -105,20 +204,30 @@ def send(chat_id, text, keyboard=None):
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
 
 def main_kb():
-    return {
-        "keyboard": [["Income", "Expense"], ["Other"]],
-        "resize_keyboard": True
-    }
+    return {"keyboard": [["Income", "Expense"], ["Other"]],
+            "resize_keyboard": True}
 
 def other_kb():
-    return {
-        "keyboard": [
-            ["Today", "Month", "Year"],
-            ["Top Income", "Top Expense"],
-            ["Back"]
-        ],
-        "resize_keyboard": True
-    }
+    return {"keyboard": [["Today", "This Month", "All"],
+                         ["Top Income", "Top Expense"],
+                         ["Manage Category"],
+                         ["Flush Menu"],
+                         ["Back"]],
+            "resize_keyboard": True}
+
+def category_kb(type_tx):
+    categories = get_categories()
+    return {"keyboard": [[c] for c in categories[type_tx]] +
+                        [["+ Add Category"], ["Back"]],
+            "resize_keyboard": True}
+
+def flush_kb():
+    return {"keyboard": [["Flush Income Today"],
+                         ["Flush Expense Today"],
+                         ["Flush Month"],
+                         ["Flush All"],
+                         ["Back"]],
+            "resize_keyboard": True}
 
 # ================= QUICK ENTRY =================
 def parse_quick(text):
@@ -134,8 +243,8 @@ def parse_quick(text):
 class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
-        content_length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(content_length)
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length)
 
         try:
             data = json.loads(body)
@@ -144,41 +253,78 @@ class handler(BaseHTTPRequestHandler):
             text = message.get("text", "").strip()
             user_id = message.get("from", {}).get("id")
 
-            if user_id not in ALLOWED_USERS or not chat_id or not text:
+            if user_id not in ALLOWED_USERS:
                 self.send_response(200); self.end_headers(); return
 
-            if text == "/start":
-                send(chat_id, "Main menu:", main_kb())
+            # DELETE CATEGORY
+            if text.lower().startswith("delete "):
+                name = text[7:].strip()
+                if delete_category(name):
+                    send(chat_id, f"Category '{name}' deleted.", main_kb())
+                else:
+                    send(chat_id, f"Category '{name}' not found.", main_kb())
                 self.send_response(200); self.end_headers(); return
 
-            # QUICK ENTRY
-            quick = parse_quick(text)
-            if quick:
-                type_tx, amount, category = quick
-                add_transaction(type_tx, amount, category)
-                send(chat_id,
-                     f"Saved {type_tx} {format_yen(amount)} for {category}",
-                     main_kb())
+            state = user_states.get(chat_id)
+
+            # FLUSH
+            if text == "Flush Menu":
+                send(chat_id, "Choose:", flush_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush Income Today":
+                delete_by_type_and_period("Income", "today")
+                send(chat_id, "Income today deleted.", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush Expense Today":
+                delete_by_type_and_period("Expense", "today")
+                send(chat_id, "Expense today deleted.", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush Month":
+                delete_month()
+                send(chat_id, "This month transactions deleted.", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush All":
+                flush_all()
+                send(chat_id, "All transactions deleted.", main_kb())
                 self.send_response(200); self.end_headers(); return
 
             # MENU
+            if text == "/start":
+                send(chat_id, "Main Menu:", main_kb())
+                self.send_response(200); self.end_headers(); return
+
             if text == "Other":
                 send(chat_id, "Choose:", other_kb())
                 self.send_response(200); self.end_headers(); return
 
             if text == "Back":
-                send(chat_id, "Main menu:", main_kb())
+                send(chat_id, "Main Menu:", main_kb())
+                user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
             # RECAP
-            if text in ["Today", "Month", "Year"]:
-                income, expense, _, _ = calculate_summary(text.lower())
-                balance = income - expense
+            if text == "Today":
+                income, expense, _, _ = calculate_summary("today")
                 send(chat_id,
-                     f"📊 {text}\n\n"
-                     f"Income: {format_yen(income)}\n"
-                     f"Expense: {format_yen(expense)}\n"
-                     f"Balance: {format_yen(balance)}",
+                     f"Today\nIncome: {format_yen(income)}\nExpense: {format_yen(expense)}",
+                     other_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "This Month":
+                income, expense, _, _ = calculate_summary("month")
+                send(chat_id,
+                     f"This Month\nIncome: {format_yen(income)}\nExpense: {format_yen(expense)}",
+                     other_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "All":
+                income, expense, _, _ = calculate_summary("all")
+                send(chat_id,
+                     f"All Time\nIncome: {format_yen(income)}\nExpense: {format_yen(expense)}",
                      other_kb())
                 self.send_response(200); self.end_headers(); return
 
@@ -186,22 +332,57 @@ class handler(BaseHTTPRequestHandler):
             if text == "Top Income":
                 _, _, cat_income, _ = calculate_summary("all")
                 top = sorted(cat_income.items(), key=lambda x: x[1], reverse=True)[:3]
-                msg = "💰 Top Income:\n\n"
-                for i, (cat, amt) in enumerate(top, 1):
-                    msg += f"{i}. {cat} - {format_yen(amt)}\n"
+                msg = "\n".join([f"{c} - {format_yen(a)}" for c, a in top])
                 send(chat_id, msg, other_kb())
                 self.send_response(200); self.end_headers(); return
 
             if text == "Top Expense":
                 _, _, _, cat_expense = calculate_summary("all")
                 top = sorted(cat_expense.items(), key=lambda x: x[1], reverse=True)[:3]
-                msg = "🔥 Top Expense:\n\n"
-                for i, (cat, amt) in enumerate(top, 1):
-                    msg += f"{i}. {cat} - {format_yen(amt)}\n"
+                msg = "\n".join([f"{c} - {format_yen(a)}" for c, a in top])
                 send(chat_id, msg, other_kb())
                 self.send_response(200); self.end_headers(); return
 
-            send(chat_id, "Main menu:", main_kb())
+            # QUICK ENTRY
+            quick = parse_quick(text)
+            if quick:
+                type_tx, amount, category = quick
+                add_transaction(type_tx, amount, category)
+                send(chat_id, "Saved.", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            # WIZARD
+            if text in ["Income", "Expense"]:
+                user_states[chat_id] = {"step": "category", "type": text}
+                send(chat_id, "Select category:", category_kb(text))
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "category":
+                if text == "+ Add Category":
+                    user_states[chat_id]["step"] = "new_category"
+                    send(chat_id, "Type new category name:")
+                else:
+                    user_states[chat_id]["category"] = text
+                    user_states[chat_id]["step"] = "amount"
+                    send(chat_id, "Enter amount:")
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "new_category":
+                add_category(state["type"], text)
+                user_states[chat_id]["step"] = "category"
+                send(chat_id, "Category added. Select:", category_kb(state["type"]))
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "amount":
+                if not text.isdigit():
+                    send(chat_id, "Numbers only.")
+                else:
+                    add_transaction(state["type"], int(text), state["category"])
+                    send(chat_id, "Saved.", main_kb())
+                    user_states.pop(chat_id, None)
+                self.send_response(200); self.end_headers(); return
+
+            send(chat_id, "Main Menu:", main_kb())
             self.send_response(200); self.end_headers(); return
 
         except Exception as e:
