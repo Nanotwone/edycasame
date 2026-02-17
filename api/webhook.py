@@ -22,18 +22,18 @@ def now_wib():
     return datetime.now(timezone(timedelta(hours=7)))
 
 # ================= FORMAT =================
-def format_currency(amount):
-    return f"{amount:,.0f} €"
+def format_yen(amount):
+    return f"{amount:,.0f} Yen"
 
 def balance_message(balance):
     if balance >= 0:
         if balance >= 1000000:
-            return f"{format_currency(balance)} 🎉 (Excellent!)"
-        return f"{format_currency(balance)} 💰 (Good Job!)"
+            return f"{format_yen(balance)} 🎉 (Excellent!)"
+        return f"{format_yen(balance)} 💰 (Good Job!)"
     else:
         if abs(balance) >= 1000000:
-            return f"{format_currency(balance)} 🚨 (Debt Alert!)"
-        return f"{format_currency(balance)} ⚠️ (Be careful!)"
+            return f"{format_yen(balance)} 🚨 (Debt Alert!)"
+        return f"{format_yen(balance)} ⚠️ (Be careful!)"
 
 # ================= GOOGLE =================
 def get_service():
@@ -302,6 +302,60 @@ class handler(BaseHTTPRequestHandler):
 
             state = user_states.get(chat_id)
 
+            # DELETE CATEGORY FLOW
+            if state and state.get("step") == "await_delete_category":
+                match = re.match(r'del\s+"(.+)"', text, re.IGNORECASE)
+                if not match:
+                    send(chat_id, 'Gunakan format: del "nama_category"')
+                else:
+                    name = match.group(1)
+                    if delete_category(name):
+                        send(chat_id, f'Category "{name}" deleted.', main_kb())
+                    else:
+                        send(chat_id, f'Category "{name}" not found.', main_kb())
+                    user_states.pop(chat_id, None)
+                self.send_response(200); self.end_headers(); return
+
+            # MENU
+            if text == "/start":
+                send(chat_id, "Main Menu:", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Other":
+                send(chat_id, "Choose:", other_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Back":
+                user_states.pop(chat_id, None)
+                send(chat_id, "Main Menu:", main_kb())
+                self.send_response(200); self.end_headers(); return
+
+            # MANAGE CATEGORY
+            if text == "Manage Category":
+                send(chat_id, "Manage categories:", manage_kb())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "+ Add Category":
+                user_states[chat_id] = {"step": "manage_add_category"}
+                send(chat_id, 'Format: Income: Salary')
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Delete Category":
+                user_states[chat_id] = {"step": "await_delete_category"}
+                send(chat_id, 'Gunakan: del "category_name"')
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "manage_add_category":
+                if ":" in text:
+                    type_tx, name = text.split(":", 1)
+                    type_tx = type_tx.strip()
+                    name = name.strip()
+                    if type_tx in ["Income", "Expense"]:
+                        add_category(type_tx, name)
+                        send(chat_id, "Category added.", main_kb())
+                        user_states.pop(chat_id, None)
+                self.send_response(200); self.end_headers(); return
+
             # FLUSH
             if text == "Flush Menu":
                 send(chat_id, "Choose:", flush_kb())
@@ -331,8 +385,8 @@ class handler(BaseHTTPRequestHandler):
             if text == "Today":
                 income, expense, balance = calculate_summary("today")
                 send(chat_id,
-                     f"Today\nIncome: {format_currency(income)}\n"
-                     f"Expense: {format_currency(expense)}\n"
+                     f"Today\nIncome: {format_yen(income)}\n"
+                     f"Expense: {format_yen(expense)}\n"
                      f"Balance: {balance_message(balance)}",
                      other_kb())
                 self.send_response(200); self.end_headers(); return
@@ -340,8 +394,8 @@ class handler(BaseHTTPRequestHandler):
             if text == "This Month":
                 income, expense, balance = calculate_summary("month")
                 send(chat_id,
-                     f"This Month\nIncome: {format_currency(income)}\n"
-                     f"Expense: {format_currency(expense)}\n"
+                     f"This Month\nIncome: {format_yen(income)}\n"
+                     f"Expense: {format_yen(expense)}\n"
                      f"Balance: {balance_message(balance)}",
                      other_kb())
                 self.send_response(200); self.end_headers(); return
@@ -349,15 +403,49 @@ class handler(BaseHTTPRequestHandler):
             if text == "All":
                 income, expense, balance = calculate_summary("all")
                 send(chat_id,
-                     f"All\nIncome: {format_currency(income)}\n"
-                     f"Expense: {format_currency(expense)}\n"
+                     f"All\nIncome: {format_yen(income)}\n"
+                     f"Expense: {format_yen(expense)}\n"
                      f"Balance: {balance_message(balance)}",
                      other_kb())
                 self.send_response(200); self.end_headers(); return
 
-            # START
-            if text == "/start":
-                send(chat_id, "Main Menu:", main_kb())
+            # WIZARD
+            if text in ["Income", "Expense"]:
+                user_states[chat_id] = {"step": "category", "type": text}
+                send(chat_id, "Select category:", category_kb(text))
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "category":
+                if text == "+ Add Category":
+                    user_states[chat_id]["step"] = "new_category"
+                    send(chat_id, "Type new category:")
+                else:
+                    user_states[chat_id]["category"] = text
+                    user_states[chat_id]["step"] = "amount"
+                    send(chat_id, "Enter amount:")
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "new_category":
+                add_category(state["type"], text)
+                user_states[chat_id]["step"] = "category"
+                send(chat_id, "Category added:", category_kb(state["type"]))
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "amount":
+                if text.isdigit():
+                    add_transaction(state["type"], int(text), state["category"])
+                    send(chat_id, "Saved.", main_kb())
+                    user_states.pop(chat_id, None)
+                else:
+                    send(chat_id, "Numbers only.")
+                self.send_response(200); self.end_headers(); return
+
+            # QUICK ENTRY
+            quick = parse_quick(text)
+            if quick:
+                type_tx, amount, category = quick
+                add_transaction(type_tx, amount, category)
+                send(chat_id, "Saved.", main_kb())
                 self.send_response(200); self.end_headers(); return
 
             send(chat_id, "Main Menu:", main_kb())
