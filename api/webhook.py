@@ -19,8 +19,21 @@ user_states = {}
 def now_wib():
     return datetime.now(timezone(timedelta(hours=7)))
 
+# ================= FORMAT =================
 def format_yen(amount):
-    return f"¥{amount:,.0f}"
+    return f"{amount:,.0f} Yen"
+
+def balance_message(balance):
+    if balance >= 0:
+        if balance >= 1000000:
+            return f"{format_yen(balance)} 🎉 (Excellent!)"
+        else:
+            return f"{format_yen(balance)} 💰 (Good Job!)"
+    else:
+        if abs(balance) >= 1000000:
+            return f"{format_yen(balance)} 🚨 (Debt Alert!)"
+        else:
+            return f"{format_yen(balance)} ⚠️ (Be careful!)"
 
 # ================= GOOGLE =================
 def get_service():
@@ -152,8 +165,8 @@ def flush_expense_today():
 def _flush_type_today(type_tx):
     rows = get_transactions()
     today = now_wib().strftime("%Y-%m-%d")
-
     remaining = [rows[0]]
+
     for row in rows[1:]:
         if row[1] == type_tx and row[0].startswith(today):
             continue
@@ -170,8 +183,8 @@ def _flush_type_today(type_tx):
 def flush_month():
     rows = get_transactions()
     month = now_wib().strftime("%Y-%m")
-
     remaining = [rows[0]]
+
     for row in rows[1:]:
         if row[0].startswith(month):
             continue
@@ -259,7 +272,7 @@ class handler(BaseHTTPRequestHandler):
 
             state = user_states.get(chat_id)
 
-            # ===== DELETE CATEGORY FLOW =====
+            # DELETE CATEGORY FLOW
             if state and state.get("step") == "await_delete_category":
                 match = re.match(r'del\s+"(.+)"', text, re.IGNORECASE)
                 if not match:
@@ -271,10 +284,9 @@ class handler(BaseHTTPRequestHandler):
                     else:
                         send(chat_id, f'Category "{name}" not found.', main_kb())
                     user_states.pop(chat_id, None)
-
                 self.send_response(200); self.end_headers(); return
 
-            # ===== MENU =====
+            # MENU
             if text == "/start":
                 send(chat_id, "Main Menu:", main_kb())
                 self.send_response(200); self.end_headers(); return
@@ -288,7 +300,7 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id, "Main Menu:", main_kb())
                 self.send_response(200); self.end_headers(); return
 
-            # ===== MANAGE CATEGORY =====
+            # MANAGE CATEGORY
             if text == "Manage Category":
                 send(chat_id, "Manage categories:", manage_kb())
                 self.send_response(200); self.end_headers(); return
@@ -320,7 +332,7 @@ class handler(BaseHTTPRequestHandler):
                         send(chat_id, "Type harus Income atau Expense.")
                 self.send_response(200); self.end_headers(); return
 
-            # ===== FLUSH =====
+            # FLUSH
             if text == "Flush Menu":
                 send(chat_id, "Choose:", flush_kb())
                 self.send_response(200); self.end_headers(); return
@@ -345,13 +357,13 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id, "All transactions deleted.", main_kb())
                 self.send_response(200); self.end_headers(); return
 
-            # ===== RECAP =====
+            # RECAP
             if text == "Today":
                 income, expense, balance = calculate_summary("today")
                 send(chat_id,
                      f"Today\nIncome: {format_yen(income)}\n"
                      f"Expense: {format_yen(expense)}\n"
-                     f"Balance: {format_yen(balance)}",
+                     f"Balance: {balance_message(balance)}",
                      other_kb())
                 self.send_response(200); self.end_headers(); return
 
@@ -360,7 +372,7 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id,
                      f"This Month\nIncome: {format_yen(income)}\n"
                      f"Expense: {format_yen(expense)}\n"
-                     f"Balance: {format_yen(balance)}",
+                     f"Balance: {balance_message(balance)}",
                      other_kb())
                 self.send_response(200); self.end_headers(); return
 
@@ -369,11 +381,11 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id,
                      f"All\nIncome: {format_yen(income)}\n"
                      f"Expense: {format_yen(expense)}\n"
-                     f"Balance: {format_yen(balance)}",
+                     f"Balance: {balance_message(balance)}",
                      other_kb())
                 self.send_response(200); self.end_headers(); return
 
-            # ===== WIZARD =====
+            # WIZARD
             if text in ["Income", "Expense"]:
                 user_states[chat_id] = {"step": "category", "type": text}
                 send(chat_id, "Select category:", category_kb(text))
@@ -404,7 +416,7 @@ class handler(BaseHTTPRequestHandler):
                     send(chat_id, "Numbers only.")
                 self.send_response(200); self.end_headers(); return
 
-            # ===== QUICK ENTRY =====
+            # QUICK ENTRY
             quick = parse_quick(text)
             if quick:
                 type_tx, amount, category = quick
