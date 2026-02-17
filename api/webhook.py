@@ -62,13 +62,12 @@ def flush_all():
     ).execute()
 
 def delete_by_period(period):
-    service = get_sheets_service()
     rows = get_all_rows()
-    now = datetime.now()
-
     if not rows:
         return
 
+    service = get_sheets_service()
+    now = datetime.now()
     remaining = [rows[0]]
 
     for row in rows[1:]:
@@ -79,11 +78,9 @@ def delete_by_period(period):
         keep = True
 
         if period == "today":
-            if date_obj.date() == now.date():
-                keep = False
+            keep = date_obj.date() != now.date()
         elif period == "month":
-            if date_obj.year == now.year and date_obj.month == now.month:
-                keep = False
+            keep = not (date_obj.year == now.year and date_obj.month == now.month)
 
         if keep:
             remaining.append(row)
@@ -140,15 +137,12 @@ def calculate_summary(period="today"):
         amount = int(row[2])
         category = row[3]
 
-        match = False
-        if period == "today":
-            match = date_obj.date() == now.date()
-        elif period == "month":
-            match = date_obj.year == now.year and date_obj.month == now.month
-        elif period == "year":
-            match = date_obj.year == now.year
-        elif period == "all":
-            match = True
+        match = (
+            (period == "today" and date_obj.date() == now.date()) or
+            (period == "month" and date_obj.year == now.year and date_obj.month == now.month) or
+            (period == "year" and date_obj.year == now.year) or
+            (period == "all")
+        )
 
         if not match:
             continue
@@ -221,11 +215,7 @@ def parse_quick_entry(text):
     sign, amount, category = match.groups()
     amount = int(amount)
 
-    if sign == "+":
-        type_tx = "Pemasukan"
-    else:
-        type_tx = "Pengeluaran"
-
+    type_tx = "Pemasukan" if sign == "+" else "Pengeluaran"
     return type_tx, amount, category
 
 # ================= HANDLER =================
@@ -242,12 +232,7 @@ class handler(BaseHTTPRequestHandler):
             text = message.get("text", "").strip()
             user_id = message.get("from", {}).get("id")
 
-            if user_id not in ALLOWED_USERS:
-                self.send_response(200)
-                self.end_headers()
-                return
-
-            if not chat_id or not text:
+            if user_id not in ALLOWED_USERS or not chat_id or not text:
                 self.send_response(200)
                 self.end_headers()
                 return
@@ -256,13 +241,11 @@ class handler(BaseHTTPRequestHandler):
             if text == "/start":
                 user_states.pop(chat_id, None)
                 send_message(chat_id, "Menu utama:", main_keyboard())
-                self.send_response(200)
-                self.end_headers()
-                return
+                self.send_response(200); self.end_headers(); return
 
             state = user_states.get(chat_id)
 
-            # ===== QUICK ENTRY (hanya jika tidak wizard) =====
+            # ===== QUICK ENTRY =====
             if state is None:
                 quick = parse_quick_entry(text)
                 if quick:
@@ -273,9 +256,7 @@ class handler(BaseHTTPRequestHandler):
                         f"⚡ {type_tx} {format_yen(amount)} untuk {category} disimpan.",
                         main_keyboard()
                     )
-                    self.send_response(200)
-                    self.end_headers()
-                    return
+                    self.send_response(200); self.end_headers(); return
 
             # ===== MENU =====
             if text == "Lain-lain":
@@ -287,6 +268,7 @@ class handler(BaseHTTPRequestHandler):
                 send_message(chat_id, "Menu utama:", main_keyboard())
                 self.send_response(200); self.end_headers(); return
 
+            # ===== REKAP =====
             if text in ["Today", "Month", "Year"]:
                 income, expense, _, _ = calculate_summary(text.lower())
                 balance = income - expense
@@ -316,6 +298,53 @@ class handler(BaseHTTPRequestHandler):
                 for i, (cat, amt) in enumerate(top, 1):
                     msg += f"{i}. {cat} - {format_yen(amt)}\n"
                 send_message(chat_id, msg, other_keyboard())
+                self.send_response(200); self.end_headers(); return
+
+            # ===== FLUSH =====
+            if text == "Flush Menu":
+                send_message(chat_id, "Pilih jenis flush:", flush_keyboard())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush Today":
+                user_states[chat_id] = {"step": "confirm_today"}
+                send_message(chat_id, "Ketik HARI untuk konfirmasi.")
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "confirm_today":
+                if text == "HARI":
+                    delete_by_period("today")
+                    send_message(chat_id, "Data hari ini dihapus.", main_keyboard())
+                else:
+                    send_message(chat_id, "Dibatalkan.", main_keyboard())
+                user_states.pop(chat_id, None)
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush Month":
+                user_states[chat_id] = {"step": "confirm_month"}
+                send_message(chat_id, "Ketik BULAN untuk konfirmasi.")
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "confirm_month":
+                if text == "BULAN":
+                    delete_by_period("month")
+                    send_message(chat_id, "Data bulan ini dihapus.", main_keyboard())
+                else:
+                    send_message(chat_id, "Dibatalkan.", main_keyboard())
+                user_states.pop(chat_id, None)
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush All":
+                user_states[chat_id] = {"step": "confirm_all"}
+                send_message(chat_id, "Ketik DELETE untuk konfirmasi.")
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "confirm_all":
+                if text == "DELETE":
+                    flush_all()
+                    send_message(chat_id, "Semua data berhasil dihapus.", main_keyboard())
+                else:
+                    send_message(chat_id, "Dibatalkan.", main_keyboard())
+                user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
             # ===== WIZARD =====
@@ -361,7 +390,9 @@ class handler(BaseHTTPRequestHandler):
                 user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
-            send_message(chat_id, "Pilih menu:", main_keyboard())
+            # ===== DEFAULT =====
+            send_message(chat_id, "Menu utama:", main_keyboard())
+            self.send_response(200); self.end_headers(); return
 
         except Exception as e:
             print("ERROR:", e)
