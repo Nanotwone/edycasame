@@ -8,20 +8,20 @@ from googleapiclient.discovery import build
 from datetime import datetime
 from collections import defaultdict
 
-# ===== ENV =====
+# ================= ENV =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 SHEET_ID = os.environ.get("SHEET_ID")
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
 ALLOWED_USERS = list(map(int, os.environ.get("ALLOWED_USERS").split(",")))
 
-# ===== STATE =====
+# ================= STATE =================
 user_states = {}
 
-# ===== FORMAT =====
+# ================= FORMAT =================
 def format_yen(amount):
     return f"¥{amount:,.0f}"
 
-# ===== GOOGLE SERVICE =====
+# ================= GOOGLE SERVICE =================
 def get_sheets_service():
     credentials_info = json.loads(GOOGLE_CREDENTIALS)
     credentials = service_account.Credentials.from_service_account_info(
@@ -30,7 +30,7 @@ def get_sheets_service():
     )
     return build("sheets", "v4", credentials=credentials)
 
-# ===== DATA =====
+# ================= DATA TRANSACTION =================
 def get_all_rows():
     service = get_sheets_service()
     result = service.spreadsheets().values().get(
@@ -39,7 +39,7 @@ def get_all_rows():
     ).execute()
     return result.get("values", [])
 
-def append_to_sheet(type_tx, amount, category):
+def append_transaction(type_tx, amount, category):
     service = get_sheets_service()
     values = [[
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -54,7 +54,7 @@ def append_to_sheet(type_tx, amount, category):
         body={"values": values}
     ).execute()
 
-def flush_sheet():
+def flush_all():
     service = get_sheets_service()
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
@@ -65,11 +65,16 @@ def delete_by_period(period):
     service = get_sheets_service()
     rows = get_all_rows()
     now = datetime.now()
+
+    if not rows:
+        return
+
     remaining = [rows[0]]
 
     for row in rows[1:]:
         if len(row) < 4:
             continue
+
         date_obj = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
         keep = True
 
@@ -90,7 +95,33 @@ def delete_by_period(period):
         body={"values": remaining}
     ).execute()
 
-# ===== SUMMARY =====
+# ================= CATEGORY =================
+def get_categories():
+    service = get_sheets_service()
+    result = service.spreadsheets().values().get(
+        spreadsheetId=SHEET_ID,
+        range="Categories!A:B"
+    ).execute()
+
+    rows = result.get("values", [])
+    data = {"Pemasukan": [], "Pengeluaran": []}
+
+    for row in rows[1:]:
+        if len(row) >= 2:
+            data[row[0]].append(row[1])
+
+    return data
+
+def add_category(type_tx, category):
+    service = get_sheets_service()
+    service.spreadsheets().values().append(
+        spreadsheetId=SHEET_ID,
+        range="Categories!A:B",
+        valueInputOption="RAW",
+        body={"values": [[type_tx, category]]}
+    ).execute()
+
+# ================= SUMMARY =================
 def calculate_summary(period="today"):
     rows = get_all_rows()
     now = datetime.now()
@@ -131,7 +162,7 @@ def calculate_summary(period="today"):
 
     return income, expense, cat_income, cat_expense
 
-# ===== TELEGRAM =====
+# ================= TELEGRAM =================
 def send_message(chat_id, text, keyboard=None):
     payload = {"chat_id": chat_id, "text": text}
     if keyboard:
@@ -173,25 +204,31 @@ def flush_keyboard():
         "resize_keyboard": True
     }
 
-# ===== QUICK ENTRY =====
+def category_keyboard(type_tx):
+    categories = get_categories()
+    return {
+        "keyboard": [[cat] for cat in categories.get(type_tx, [])] +
+                    [["+ Tambah Kategori"], ["Kembali"]],
+        "resize_keyboard": True
+    }
+
+# ================= QUICK ENTRY =================
 def parse_quick_entry(text):
-    match = re.match(r"^([+-]?)(\d+)\s+(.+)$", text)
+    match = re.match(r"^([+-]?)(\d+)\s+(.+)$", text.strip())
     if not match:
         return None
 
     sign, amount, category = match.groups()
     amount = int(amount)
 
-    if sign == "-":
-        type_tx = "Pengeluaran"
-    elif sign == "+":
+    if sign == "+":
         type_tx = "Pemasukan"
     else:
         type_tx = "Pengeluaran"
 
     return type_tx, amount, category
 
-# ===== HANDLER =====
+# ================= HANDLER =================
 class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
@@ -221,7 +258,7 @@ class handler(BaseHTTPRequestHandler):
             quick = parse_quick_entry(text)
             if quick:
                 type_tx, amount, category = quick
-                append_to_sheet(type_tx, amount, category)
+                append_transaction(type_tx, amount, category)
                 send_message(
                     chat_id,
                     f"⚡ {type_tx} {format_yen(amount)} untuk {category} disimpan.",
@@ -242,6 +279,7 @@ class handler(BaseHTTPRequestHandler):
                 period = text.lower()
                 income, expense, _, _ = calculate_summary(period)
                 balance = income - expense
+
                 send_message(
                     chat_id,
                     f"📊 Rekap {text}\n\n"
@@ -300,7 +338,7 @@ class handler(BaseHTTPRequestHandler):
 
             elif state and state.get("step") == "confirm_all":
                 if text == "DELETE":
-                    flush_sheet()
+                    flush_all()
                     send_message(chat_id, "Semua data berhasil dihapus.", main_keyboard())
                 else:
                     send_message(chat_id, "Dibatalkan.", main_keyboard())
@@ -309,24 +347,55 @@ class handler(BaseHTTPRequestHandler):
             # ===== WIZARD =====
             elif text in ["Pemasukan", "Pengeluaran"]:
                 user_states[chat_id] = {"step": "category", "type": text}
-                send_message(chat_id, "Kategori?")
+                send_message(chat_id, "Pilih kategori:", category_keyboard(text))
 
             elif state and state.get("step") == "category":
+                if text == "+ Tambah Kategori":
+                    user_states[chat_id]["step"] = "new_category"
+                    send_message(chat_id, "Ketik nama kategori baru:")
+                    return
+
+                if text == "Kembali":
+                    send_message(chat_id, "Menu utama:", main_keyboard())
+                    user_states[chat_id] = None
+                    return
+
                 user_states[chat_id]["category"] = text
                 user_states[chat_id]["step"] = "amount"
                 send_message(chat_id, "Nominal?")
+
+            elif state and state.get("step") == "new_category":
+                new_cat = text.strip()
+                type_tx = state["type"]
+
+                categories = get_categories()
+                if new_cat in categories.get(type_tx, []):
+                    send_message(chat_id, "Kategori sudah ada.")
+                else:
+                    add_category(type_tx, new_cat)
+                    send_message(chat_id, f"Kategori '{new_cat}' ditambahkan.")
+
+                user_states[chat_id]["step"] = "category"
+                send_message(chat_id, "Pilih kategori:", category_keyboard(type_tx))
 
             elif state and state.get("step") == "amount":
                 if not text.isdigit():
                     send_message(chat_id, "Masukkan angka saja.")
                     return
+
                 amount = int(text)
-                append_to_sheet(state["type"], amount, state["category"])
+                append_transaction(
+                    state["type"],
+                    amount,
+                    state["category"]
+                )
+
                 send_message(
                     chat_id,
                     f"✔️ {state['type']} {format_yen(amount)} untuk {state['category']} disimpan.",
                     main_keyboard()
                 )
+
                 user_states[chat_id] = None
 
             else:
