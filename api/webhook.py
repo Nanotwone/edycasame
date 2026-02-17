@@ -73,17 +73,51 @@ def delete_by_period(period):
     for row in rows[1:]:
         if len(row) < 4:
             continue
+        date_obj = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+
+        match = (
+            (period == "today" and date_obj.date() == now.date()) or
+            (period == "month" and date_obj.year == now.year and date_obj.month == now.month)
+        )
+
+        if match:
+            continue
+
+        remaining.append(row)
+
+    service.spreadsheets().values().update(
+        spreadsheetId=SHEET_ID,
+        range="Sheet1!A:D",
+        valueInputOption="RAW",
+        body={"values": remaining}
+    ).execute()
+
+def delete_by_type_and_period(type_tx, period):
+    rows = get_all_rows()
+    if not rows:
+        return
+
+    service = get_sheets_service()
+    now = datetime.now()
+    remaining = [rows[0]]
+
+    for row in rows[1:]:
+        if len(row) < 4:
+            continue
 
         date_obj = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
-        keep = True
+        row_type = row[1]
 
-        if period == "today":
-            keep = date_obj.date() != now.date()
-        elif period == "month":
-            keep = not (date_obj.year == now.year and date_obj.month == now.month)
+        match_period = (
+            (period == "today" and date_obj.date() == now.date()) or
+            (period == "month" and date_obj.year == now.year and date_obj.month == now.month) or
+            (period == "year" and date_obj.year == now.year)
+        )
 
-        if keep:
-            remaining.append(row)
+        if row_type == type_tx and match_period:
+            continue
+
+        remaining.append(row)
 
     service.spreadsheets().values().update(
         spreadsheetId=SHEET_ID,
@@ -193,7 +227,29 @@ def flush_keyboard():
             ["Flush Today"],
             ["Flush Month"],
             ["Flush All"],
+            ["Flush Pengeluaran"],
+            ["Flush Pemasukan"],
             ["Kembali"]
+        ],
+        "resize_keyboard": True
+    }
+
+def flush_period_keyboard():
+    return {
+        "keyboard": [
+            ["Today"],
+            ["Month"],
+            ["Year"],
+            ["Kembali"]
+        ],
+        "resize_keyboard": True
+    }
+
+def confirm_keyboard():
+    return {
+        "keyboard": [
+            ["YA Hapus"],
+            ["Batal"]
         ],
         "resize_keyboard": True
     }
@@ -211,10 +267,8 @@ def parse_quick_entry(text):
     match = re.match(r"^([+-]?)(\d+)\s+(.+)$", text.strip())
     if not match:
         return None
-
     sign, amount, category = match.groups()
     amount = int(amount)
-
     type_tx = "Pemasukan" if sign == "+" else "Pengeluaran"
     return type_tx, amount, category
 
@@ -237,7 +291,6 @@ class handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
 
-            # ===== START =====
             if text == "/start":
                 user_states.pop(chat_id, None)
                 send_message(chat_id, "Menu utama:", main_keyboard())
@@ -245,20 +298,17 @@ class handler(BaseHTTPRequestHandler):
 
             state = user_states.get(chat_id)
 
-            # ===== QUICK ENTRY =====
             if state is None:
                 quick = parse_quick_entry(text)
                 if quick:
                     type_tx, amount, category = quick
                     append_transaction(type_tx, amount, category)
-                    send_message(
-                        chat_id,
-                        f"⚡ {type_tx} {format_yen(amount)} untuk {category} disimpan.",
-                        main_keyboard()
-                    )
+                    send_message(chat_id,
+                                 f"⚡ {type_tx} {format_yen(amount)} untuk {category} disimpan.",
+                                 main_keyboard())
                     self.send_response(200); self.end_headers(); return
 
-            # ===== MENU =====
+            # ==== MENU ====
             if text == "Lain-lain":
                 send_message(chat_id, "Pilih fitur:", other_keyboard())
                 self.send_response(200); self.end_headers(); return
@@ -268,18 +318,15 @@ class handler(BaseHTTPRequestHandler):
                 send_message(chat_id, "Menu utama:", main_keyboard())
                 self.send_response(200); self.end_headers(); return
 
-            # ===== REKAP =====
             if text in ["Today", "Month", "Year"]:
                 income, expense, _, _ = calculate_summary(text.lower())
                 balance = income - expense
-                send_message(
-                    chat_id,
-                    f"📊 Rekap {text}\n\n"
-                    f"Pemasukan: {format_yen(income)}\n"
-                    f"Pengeluaran: {format_yen(expense)}\n"
-                    f"Saldo: {format_yen(balance)}",
-                    other_keyboard()
-                )
+                send_message(chat_id,
+                             f"📊 Rekap {text}\n\n"
+                             f"Pemasukan: {format_yen(income)}\n"
+                             f"Pengeluaran: {format_yen(expense)}\n"
+                             f"Saldo: {format_yen(balance)}",
+                             other_keyboard())
                 self.send_response(200); self.end_headers(); return
 
             if text == "Top Expense":
@@ -300,54 +347,61 @@ class handler(BaseHTTPRequestHandler):
                 send_message(chat_id, msg, other_keyboard())
                 self.send_response(200); self.end_headers(); return
 
-            # ===== FLUSH =====
             if text == "Flush Menu":
                 send_message(chat_id, "Pilih jenis flush:", flush_keyboard())
                 self.send_response(200); self.end_headers(); return
 
+            # ==== FLUSH GLOBAL ====
             if text == "Flush Today":
-                user_states[chat_id] = {"step": "confirm_today"}
-                send_message(chat_id, "Ketik HARI untuk konfirmasi.")
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "confirm_today":
-                if text == "HARI":
-                    delete_by_period("today")
-                    send_message(chat_id, "Data hari ini dihapus.", main_keyboard())
-                else:
-                    send_message(chat_id, "Dibatalkan.", main_keyboard())
-                user_states.pop(chat_id, None)
+                delete_by_period("today")
+                send_message(chat_id, "Data hari ini dihapus.", main_keyboard())
                 self.send_response(200); self.end_headers(); return
 
             if text == "Flush Month":
-                user_states[chat_id] = {"step": "confirm_month"}
-                send_message(chat_id, "Ketik BULAN untuk konfirmasi.")
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "confirm_month":
-                if text == "BULAN":
-                    delete_by_period("month")
-                    send_message(chat_id, "Data bulan ini dihapus.", main_keyboard())
-                else:
-                    send_message(chat_id, "Dibatalkan.", main_keyboard())
-                user_states.pop(chat_id, None)
+                delete_by_period("month")
+                send_message(chat_id, "Data bulan ini dihapus.", main_keyboard())
                 self.send_response(200); self.end_headers(); return
 
             if text == "Flush All":
-                user_states[chat_id] = {"step": "confirm_all"}
-                send_message(chat_id, "Ketik DELETE untuk konfirmasi.")
+                flush_all()
+                send_message(chat_id, "Semua data dihapus.", main_keyboard())
                 self.send_response(200); self.end_headers(); return
 
-            if state and state.get("step") == "confirm_all":
-                if text == "DELETE":
-                    flush_all()
-                    send_message(chat_id, "Semua data berhasil dihapus.", main_keyboard())
+            # ==== FLUSH BY TYPE ====
+            if text == "Flush Pengeluaran":
+                user_states[chat_id] = {"step": "flush_choose_period", "type": "Pengeluaran"}
+                send_message(chat_id, "Pilih periode:", flush_period_keyboard())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "Flush Pemasukan":
+                user_states[chat_id] = {"step": "flush_choose_period", "type": "Pemasukan"}
+                send_message(chat_id, "Pilih periode:", flush_period_keyboard())
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "flush_choose_period":
+                if text in ["Today", "Month", "Year"]:
+                    user_states[chat_id] = {
+                        "step": "flush_confirm",
+                        "type": state["type"],
+                        "period": text.lower()
+                    }
+                    send_message(chat_id,
+                                 f"Yakin hapus {state['type']} periode {text}?",
+                                 confirm_keyboard())
+                    self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "flush_confirm":
+                if text == "YA Hapus":
+                    delete_by_type_and_period(state["type"], state["period"])
+                    send_message(chat_id,
+                                 f"{state['type']} periode {state['period'].capitalize()} dihapus.",
+                                 main_keyboard())
                 else:
                     send_message(chat_id, "Dibatalkan.", main_keyboard())
                 user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
-            # ===== WIZARD =====
+            # ==== WIZARD ====
             if text in ["Pemasukan", "Pengeluaran"]:
                 user_states[chat_id] = {"step": "category", "type": text}
                 send_message(chat_id, "Pilih kategori:", category_keyboard(text))
@@ -380,17 +434,12 @@ class handler(BaseHTTPRequestHandler):
 
                 amount = int(text)
                 append_transaction(state["type"], amount, state["category"])
-
-                send_message(
-                    chat_id,
-                    f"✔️ {state['type']} {format_yen(amount)} untuk {state['category']} disimpan.",
-                    main_keyboard()
-                )
-
+                send_message(chat_id,
+                             f"✔️ {state['type']} {format_yen(amount)} untuk {state['category']} disimpan.",
+                             main_keyboard())
                 user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
-            # ===== DEFAULT =====
             send_message(chat_id, "Menu utama:", main_keyboard())
             self.send_response(200); self.end_headers(); return
 
