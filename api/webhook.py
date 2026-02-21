@@ -187,7 +187,7 @@ def send(chat_id, text, keyboard=None):
 
 def main_menu():
     return [
-        ["/all_expense"]
+        ["/all_expense"],
         ["Account Balance"],
         ["Income", "Expense"],
         ["Transfer"],
