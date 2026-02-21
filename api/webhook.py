@@ -133,11 +133,10 @@ def calculate_account_balance():
 
     return balances
 
-# ================= ANALYTICS (MONTH PAGINATION) =================
+# ================= ALL EXPENSE ANALYTICS =================
 
-def get_month_expense_data():
+def get_all_expense_data():
     rows = get_sheet("Sheet1!A:F")
-    now = now_wib()
     data = {}
 
     for row in rows[1:]:
@@ -147,16 +146,8 @@ def get_month_expense_data():
         if row[1] != "Expense":
             continue
 
-        try:
-            raw_date = row[0].strip().lstrip("'")
-            tx_date = datetime.strptime(raw_date, "%Y-%m-%d %H:%M:%S")
-        except:
-            continue
-
-        if tx_date.year != now.year or tx_date.month != now.month:
-            continue
-
         category = row[3]
+
         try:
             amount = int(float(row[2]))
         except:
@@ -174,7 +165,7 @@ def format_expense_page(sorted_data, page=0, per_page=5):
     if not slice_data:
         return None
 
-    msg = f"Top Expense This Month (Page {page+1})\n\n"
+    msg = f"All Expense by Category (Page {page+1})\n\n"
 
     for i, (cat, amt) in enumerate(slice_data, start=start+1):
         msg += f"{i}. {cat} — €{amt}\n"
@@ -227,7 +218,7 @@ def main_menu():
         ["Account Balance"],
         ["Manage Account"],
         ["QuickClean"],
-        ["/top_month"]
+        ["/all_expense"]
     ]
 
 # ================= HANDLER =================
@@ -277,7 +268,7 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id, msg, main_menu())
                 self.send_response(200); self.end_headers(); return
 
-            # INCOME FLOW
+            # INCOME
             if text == "Income":
                 user_states[chat_id] = {"step": "income_account"}
                 send(chat_id, "Account name?")
@@ -299,7 +290,7 @@ class handler(BaseHTTPRequestHandler):
                 user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
-            # EXPENSE FLOW
+            # EXPENSE
             if text == "Expense":
                 user_states[chat_id] = {"step": "expense_category"}
                 send(chat_id, "Category?")
@@ -333,7 +324,7 @@ class handler(BaseHTTPRequestHandler):
                 user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
-            # TRANSFER FLOW
+            # TRANSFER
             if text == "Transfer":
                 user_states[chat_id] = {"step": "transfer_from"}
                 send(chat_id, "From account?")
@@ -409,11 +400,11 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id, "All transactions cleared.", main_menu())
                 self.send_response(200); self.end_headers(); return
 
-            # MONTH PAGINATION
-            if text == "/top_month":
-                data = get_month_expense_data()
+            # ALL EXPENSE PAGINATION
+            if text == "/all_expense":
+                data = get_all_expense_data()
                 if not data:
-                    send(chat_id, "No expense recorded this month.", main_menu())
+                    send(chat_id, "No expense recorded.", main_menu())
                     self.send_response(200); self.end_headers(); return
 
                 user_states[chat_id] = {
@@ -432,6 +423,7 @@ class handler(BaseHTTPRequestHandler):
                 if text == "Next":
                     page = state["page"] + 1
                     data = state["data"]
+
                     msg = format_expense_page(data, page)
 
                     if not msg:
