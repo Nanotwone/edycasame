@@ -46,7 +46,9 @@ def get_sheet(range_name):
 
 def get_accounts():
     rows = get_sheet("Accounts!A:A")
-    return [r[0].strip() for r in rows[1:] if r]
+    if not rows:
+        return []
+    return [r[0].strip() for r in rows[1:] if r and r[0].strip()]
 
 def add_account(name):
     service = get_service()
@@ -64,21 +66,12 @@ def delete_account(name):
             return False
 
     acc_rows = get_sheet("Accounts!A:A")
-    if not acc_rows:
-        return False
-
     header = acc_rows[0]
     remaining = [header]
-    found = False
 
     for row in acc_rows[1:]:
-        if row[0].strip() == name:
-            found = True
-            continue
-        remaining.append(row)
-
-    if not found:
-        return False
+        if row[0].strip() != name:
+            remaining.append(row)
 
     service = get_service()
     service.spreadsheets().values().clear(
@@ -95,7 +88,7 @@ def delete_account(name):
 
     return True
 
-# ================= TRANSACTION CORE =================
+# ================= TRANSACTIONS =================
 
 def add_transaction(type_tx, amount, category, account, note=""):
     service = get_service()
@@ -115,7 +108,7 @@ def add_transaction(type_tx, amount, category, account, note=""):
 
 def calculate_account_balance():
     rows = get_sheet("Sheet1!A:F")
-    account_map = {}
+    balances = {}
 
     for row in rows[1:]:
         if len(row) < 5:
@@ -129,89 +122,19 @@ def calculate_account_balance():
 
         account = row[4]
 
-        if account not in account_map:
-            account_map[account] = 0
+        balances.setdefault(account, 0)
 
         if type_tx in ["Income", "Transfer-In"]:
-            account_map[account] += amount
+            balances[account] += amount
         elif type_tx in ["Expense", "Transfer-Out"]:
-            account_map[account] -= amount
+            balances[account] -= amount
 
     for acc in get_accounts():
-        if acc not in account_map:
-            account_map[acc] = 0
+        balances.setdefault(acc, 0)
 
-    return account_map
+    return balances
 
-# ================= TRANSFER =================
-
-def transfer_funds(amount, from_acc, to_acc):
-    timestamp = now_wib().strftime("%Y-%m-%d %H:%M:%S")
-    service = get_service()
-    service.spreadsheets().values().append(
-        spreadsheetId=SHEET_ID,
-        range="Sheet1!A:F",
-        valueInputOption="RAW",
-        body={"values": [
-            [timestamp, "Transfer-Out", amount, "Transfer", from_acc, f"To {to_acc}"],
-            [timestamp, "Transfer-In", amount, "Transfer", to_acc, f"From {from_acc}"]
-        ]}
-    ).execute()
-
-# ================= SUMMARY & ANALYTICS =================
-
-def daily_summary():
-    today = now_wib().strftime("%Y-%m-%d")
-    rows = get_sheet("Sheet1!A:F")
-
-    income = 0
-    expense = 0
-
-    for row in rows[1:]:
-        if len(row) < 3:
-            continue
-
-        if row[0].startswith(today):
-            if row[1] == "Income":
-                income += int(float(row[2]))
-            elif row[1] == "Expense":
-                expense += int(float(row[2]))
-
-    balances = calculate_account_balance()
-
-    msg = f"Daily Summary\nIncome: {format_currency(income)}\nExpense: {format_currency(expense)}\n\n"
-    for acc, bal in balances.items():
-        msg += f"{acc}: {format_currency(bal)}\n"
-
-    return msg
-
-def today_expense_detail():
-    today = now_wib().strftime("%Y-%m-%d")
-    rows = get_sheet("Sheet1!A:F")
-
-    details = []
-    total = 0
-
-    for row in rows[1:]:
-        if len(row) < 6:
-            continue
-
-        if row[0].startswith(today) and row[1] == "Expense":
-            time_part = row[0].split(" ")[1]
-            category = row[3]
-            account = row[4]
-            amount = int(float(row[2]))
-
-            total += amount
-            details.append(f"{time_part} | {category} | {account} | €{amount}")
-
-    if not details:
-        return "No expense today."
-
-    msg = "Today's Expense Detail:\n\n"
-    msg += "\n".join(details)
-    msg += f"\n\nTotal: €{total}"
-    return msg
+# ================= ANALYTICS =================
 
 def top_expense(period="today", top_n=3):
     rows = get_sheet("Sheet1!A:F")
@@ -219,7 +142,7 @@ def top_expense(period="today", top_n=3):
     today = now.strftime("%Y-%m-%d")
     month = now.strftime("%Y-%m")
 
-    category_map = {}
+    data = {}
 
     for row in rows[1:]:
         if len(row) < 6:
@@ -227,42 +150,40 @@ def top_expense(period="today", top_n=3):
 
         date = row[0]
         type_tx = row[1]
-        category = row[3]
-
-        try:
-            amount = int(float(row[2]))
-        except:
-            continue
 
         if type_tx != "Expense":
             continue
 
-        match = (
-            (period == "today" and date.startswith(today)) or
-            (period == "month" and date.startswith(month))
-        )
-
-        if not match:
+        if period == "today" and not date.startswith(today):
             continue
 
-        if category not in category_map:
-            category_map[category] = 0
+        if period == "month" and not date.startswith(month):
+            continue
 
-        category_map[category] += amount
+        category = row[3]
+        amount = int(float(row[2]))
 
-    if not category_map:
-        return "No expense data."
+        data[category] = data.get(category, 0) + amount
 
-    sorted_data = sorted(category_map.items(),
-                         key=lambda x: x[1],
-                         reverse=True)
+    if not data:
+        return "No expense recorded."
 
-    msg = f"Top {top_n} Expense ({period}):\n\n"
+    sorted_data = sorted(data.items(), key=lambda x: x[1], reverse=True)
 
-    for i, (cat, amt) in enumerate(sorted_data[:top_n], start=1):
+    msg = f"Top {top_n} Expense ({period})\n\n"
+    for i, (cat, amt) in enumerate(sorted_data[:top_n], 1):
         msg += f"{i}. {cat} — €{amt}\n"
 
     return msg
+
+# ================= QUICK CLEAN =================
+
+def quick_clean():
+    service = get_service()
+    service.spreadsheets().values().clear(
+        spreadsheetId=SHEET_ID,
+        range="Sheet1!A2:Z"
+    ).execute()
 
 # ================= QUICK INPUT =================
 
@@ -299,8 +220,8 @@ def main_menu():
         ["Income", "Expense"],
         ["Transfer"],
         ["Account Balance"],
-        ["Manage Account", "Close Month"],
-        ["/daily", "/today_detail"],
+        ["Manage Account"],
+        ["QuickClean"],
         ["/top_today", "/top_month"]
     ]
 
@@ -325,27 +246,22 @@ class handler(BaseHTTPRequestHandler):
             state = user_states.get(chat_id)
 
             if text == "/start":
-                send(chat_id,
-                     "Finance Bot Ready.\nQuick:\n+1000 Cash\n-200 Food Cash",
-                     main_menu())
+                send(chat_id, "Finance Bot Ready.", main_menu())
                 self.send_response(200); self.end_headers(); return
 
-            if text == "/daily":
-                send(chat_id, daily_summary(), main_menu())
+            # QUICK INPUT
+            quick = parse_quick(text)
+            if quick:
+                type_tx, amount, category, account = quick
+                balances = calculate_account_balance()
+                if type_tx == "Expense" and balances.get(account, 0) < amount:
+                    send(chat_id, "Insufficient balance.", main_menu())
+                    self.send_response(200); self.end_headers(); return
+                add_transaction(type_tx, amount, category, account)
+                send(chat_id, "Saved.", main_menu())
                 self.send_response(200); self.end_headers(); return
 
-            if text == "/today_detail":
-                send(chat_id, today_expense_detail(), main_menu())
-                self.send_response(200); self.end_headers(); return
-
-            if text == "/top_today":
-                send(chat_id, top_expense("today"), main_menu())
-                self.send_response(200); self.end_headers(); return
-
-            if text == "/top_month":
-                send(chat_id, top_expense("month"), main_menu())
-                self.send_response(200); self.end_headers(); return
-
+            # ACCOUNT BALANCE
             if text == "Account Balance":
                 balances = calculate_account_balance()
                 msg = ""
@@ -399,15 +315,12 @@ class handler(BaseHTTPRequestHandler):
                     send(chat_id, "Numbers only.", main_menu())
                     user_states.pop(chat_id, None)
                     self.send_response(200); self.end_headers(); return
-
                 amount = int(text)
                 balances = calculate_account_balance()
-
                 if balances.get(state["account"], 0) < amount:
                     send(chat_id, "Insufficient balance.", main_menu())
                     user_states.pop(chat_id, None)
                     self.send_response(200); self.end_headers(); return
-
                 add_transaction("Expense", amount, state["category"], state["account"])
                 send(chat_id, "Expense saved.", main_menu())
                 user_states.pop(chat_id, None)
@@ -436,45 +349,69 @@ class handler(BaseHTTPRequestHandler):
                     send(chat_id, "Numbers only.", main_menu())
                     user_states.pop(chat_id, None)
                     self.send_response(200); self.end_headers(); return
-
                 amount = int(text)
-                from_acc = state["from"]
-                to_acc = state["to"]
-
-                if from_acc == to_acc:
-                    send(chat_id, "Cannot transfer to same account.", main_menu())
-                    user_states.pop(chat_id, None)
-                    self.send_response(200); self.end_headers(); return
-
                 balances = calculate_account_balance()
-                if balances.get(from_acc, 0) < amount:
+                if balances.get(state["from"], 0) < amount:
                     send(chat_id, "Insufficient balance.", main_menu())
                     user_states.pop(chat_id, None)
                     self.send_response(200); self.end_headers(); return
-
-                transfer_funds(amount, from_acc, to_acc)
+                add_transaction("Transfer-Out", amount, "Transfer", state["from"], f"To {state['to']}")
+                add_transaction("Transfer-In", amount, "Transfer", state["to"], f"From {state['from']}")
                 send(chat_id, "Transfer saved.", main_menu())
                 user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
-            if text == "Close Month":
-                if monthly_closing():
-                    send(chat_id, "Monthly closing saved.", main_menu())
-                else:
-                    send(chat_id, "Month already closed.", main_menu())
+            # MANAGE ACCOUNT
+            if text == "Manage Account":
+                user_states[chat_id] = {"step": "manage_account"}
+                send(chat_id, "1 Add\n2 Delete\n3 List\nType number.")
                 self.send_response(200); self.end_headers(); return
 
-            quick = parse_quick(text)
-            if quick:
-                type_tx, amount, category, account = quick
-                balances = calculate_account_balance()
+            if state and state.get("step") == "manage_account":
 
-                if type_tx == "Expense" and balances.get(account, 0) < amount:
-                    send(chat_id, "Insufficient balance.", main_menu())
+                if text == "1":
+                    user_states[chat_id] = {"step": "add_account"}
+                    send(chat_id, "Enter account name:")
                     self.send_response(200); self.end_headers(); return
 
-                add_transaction(type_tx, amount, category, account)
-                send(chat_id, "Saved.", main_menu())
+                if text == "2":
+                    user_states[chat_id] = {"step": "delete_account"}
+                    send(chat_id, "Enter account name to delete:")
+                    self.send_response(200); self.end_headers(); return
+
+                if text == "3":
+                    accounts = get_accounts()
+                    send(chat_id, "Accounts:\n" + "\n".join(accounts), main_menu())
+                    user_states.pop(chat_id, None)
+                    self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "add_account":
+                add_account(text)
+                send(chat_id, "Account added.", main_menu())
+                user_states.pop(chat_id, None)
+                self.send_response(200); self.end_headers(); return
+
+            if state and state.get("step") == "delete_account":
+                if delete_account(text):
+                    send(chat_id, "Account deleted.", main_menu())
+                else:
+                    send(chat_id, "Cannot delete. Account used.", main_menu())
+                user_states.pop(chat_id, None)
+                self.send_response(200); self.end_headers(); return
+
+            # QUICK CLEAN
+            if text == "QuickClean":
+                quick_clean()
+                send(chat_id, "All transactions cleared.", main_menu())
+                self.send_response(200); self.end_headers(); return
+
+            # ANALYTICS
+            if text == "/top_today":
+                send(chat_id, top_expense("today"), main_menu())
+                self.send_response(200); self.end_headers(); return
+
+            if text == "/top_month":
+                send(chat_id, top_expense("month"), main_menu())
                 self.send_response(200); self.end_headers(); return
 
             send(chat_id, "Unknown command.", main_menu())
