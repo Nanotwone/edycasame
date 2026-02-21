@@ -26,10 +26,6 @@ def now_wib():
 def format_currency(amount):
     return f"€{amount:,.0f}"
 
-def balance_message(balance):
-    emoji = "💰" if balance >= 0 else "⚠️"
-    return f"{format_currency(balance)} {emoji}"
-
 # ================= GOOGLE =================
 
 def get_service():
@@ -63,80 +59,135 @@ def add_account(name):
         body={"values": [[name]]}
     ).execute()
 
-# ================= CATEGORIES =================
-
-def get_categories(type_tx=None):
-    rows = get_sheet("Categories!A:B")
-    data = {"Income": [], "Expense": []}
+def delete_account(name):
+    rows = get_sheet("Sheet1!A:E")
     for row in rows[1:]:
-        if len(row) >= 2:
-            data[row[0].strip()].append(row[1].strip())
-    return data if not type_tx else data.get(type_tx, [])
+        if len(row) >= 5 and row[4].strip() == name:
+            return False
+    acc_rows = get_sheet("Accounts!A:A")
+    remaining = [acc_rows[0]]
+    for row in acc_rows[1:]:
+        if row[0].strip() != name:
+            remaining.append(row)
+    service = get_service()
+    service.spreadsheets().values().clear(
+        spreadsheetId=SHEET_ID,
+        range="Accounts!A2:A"
+    ).execute()
+    service.spreadsheets().values().update(
+        spreadsheetId=SHEET_ID,
+        range="Accounts!A1",
+        valueInputOption="RAW",
+        body={"values": remaining}
+    ).execute()
+    return True
 
 # ================= TRANSACTIONS =================
 
-def add_transaction(type_tx, amount, category, account):
+def add_transaction(type_tx, amount, category, account, note=""):
     service = get_service()
     service.spreadsheets().values().append(
         spreadsheetId=SHEET_ID,
-        range="Sheet1!A:E",
+        range="Sheet1!A:F",
         valueInputOption="RAW",
         body={"values": [[
             now_wib().strftime("%Y-%m-%d %H:%M:%S"),
             type_tx,
             amount,
             category,
-            account
+            account,
+            note
         ]]}
     ).execute()
 
 def calculate_account_balance():
-    rows = get_sheet("Sheet1!A:E")
+    rows = get_sheet("Sheet1!A:F")
     account_map = {}
-
     for row in rows[1:]:
         if len(row) < 5:
             continue
-
-        type_tx = row[1].strip().lower()
-        try:
-            amount = int(float(row[2]))
-        except:
-            continue
-
+        type_tx = row[1].strip()
+        amount = int(float(row[2]))
         account = row[4].strip()
-
         if account not in account_map:
             account_map[account] = 0
-
-        if type_tx == "income":
+        if type_tx in ["Income", "Transfer-In"]:
             account_map[account] += amount
-        elif type_tx == "expense":
+        elif type_tx in ["Expense", "Transfer-Out"]:
             account_map[account] -= amount
-
     return account_map
 
-# ================= QUICK PARSER =================
+# ================= TRANSFER =================
+
+def transfer_funds(amount, from_acc, to_acc):
+    timestamp = now_wib().strftime("%Y-%m-%d %H:%M:%S")
+    service = get_service()
+    service.spreadsheets().values().append(
+        spreadsheetId=SHEET_ID,
+        range="Sheet1!A:F",
+        valueInputOption="RAW",
+        body={"values": [
+            [timestamp, "Transfer-Out", amount, "Transfer", from_acc, f"To {to_acc}"],
+            [timestamp, "Transfer-In", amount, "Transfer", to_acc, f"From {from_acc}"]
+        ]}
+    ).execute()
+
+# ================= MONTHLY CLOSING =================
+
+def monthly_closing():
+    month = now_wib().strftime("%Y-%m")
+    existing = get_sheet("Monthly_Closing!A:C")
+    for row in existing[1:]:
+        if row[0] == month:
+            return False
+    balances = calculate_account_balance()
+    rows = []
+    for acc, bal in balances.items():
+        rows.append([month, acc, bal])
+    service = get_service()
+    service.spreadsheets().values().append(
+        spreadsheetId=SHEET_ID,
+        range="Monthly_Closing!A:C",
+        valueInputOption="RAW",
+        body={"values": rows}
+    ).execute()
+    return True
+
+# ================= SUMMARY =================
+
+def daily_summary():
+    today = now_wib().strftime("%Y-%m-%d")
+    rows = get_sheet("Sheet1!A:F")
+    income = 0
+    expense = 0
+    for row in rows[1:]:
+        if len(row) < 3:
+            continue
+        if row[0].startswith(today):
+            if row[1] == "Income":
+                income += int(float(row[2]))
+            elif row[1] == "Expense":
+                expense += int(float(row[2]))
+    balances = calculate_account_balance()
+    msg = f"Daily Summary\nIncome: {format_currency(income)}\nExpense: {format_currency(expense)}\n\n"
+    for acc, bal in balances.items():
+        msg += f"{acc}: {format_currency(bal)}\n"
+    return msg
+
+# ================= QUICK INPUT =================
 
 def parse_quick(text):
     match = re.match(r"^([+-])(\d+)\s+(.+)$", text.strip())
     if not match:
         return None
-
     sign, amount, rest = match.groups()
     amount = int(amount)
     parts = rest.split()
-
     if sign == "+":
-        account = parts[0]
-        return "Income", amount, "", account
-
-    if sign == "-":
-        if len(parts) < 2:
-            return None
-        category = parts[0]
-        account = parts[1]
-        return "Expense", amount, category, account
+        return ("Income", amount, "", parts[0])
+    if sign == "-" and len(parts) >= 2:
+        return ("Expense", amount, parts[0], parts[1])
+    return None
 
 # ================= TELEGRAM =================
 
@@ -148,23 +199,13 @@ def send(chat_id, text, keyboard=None):
 
 def main_kb():
     return {
-        "keyboard": [["Income", "Expense"],
-                     ["Account Balance"],
-                     ["Other"]],
-        "resize_keyboard": True
-    }
-
-def account_kb():
-    accounts = get_accounts()
-    return {
-        "keyboard": [[a] for a in accounts] + [["Back"]],
-        "resize_keyboard": True
-    }
-
-def category_kb(type_tx):
-    categories = get_categories(type_tx)
-    return {
-        "keyboard": [[c] for c in categories] + [["Back"]],
+        "keyboard": [
+            ["Income", "Expense"],
+            ["Transfer"],
+            ["Account Balance"],
+            ["Manage Account"],
+            ["Close Month"]
+        ],
         "resize_keyboard": True
     }
 
@@ -175,7 +216,6 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
-
         try:
             data = json.loads(body)
             message = data.get("message", {})
@@ -188,104 +228,42 @@ class handler(BaseHTTPRequestHandler):
 
             state = user_states.get(chat_id)
 
-            # START
             if text == "/start":
                 send(chat_id, "Main Menu:", main_kb())
                 self.send_response(200); self.end_headers(); return
 
-            # ACCOUNT BALANCE
+            if text == "/daily":
+                send(chat_id, daily_summary(), main_kb())
+                self.send_response(200); self.end_headers(); return
+
             if text == "Account Balance":
-                data_bal = calculate_account_balance()
-                msg = "Account Balance:\n"
-                for acc, bal in data_bal.items():
-                    msg += f"{acc}: {balance_message(bal)}\n"
+                balances = calculate_account_balance()
+                msg = ""
+                for acc, bal in balances.items():
+                    msg += f"{acc}: {format_currency(bal)}\n"
                 send(chat_id, msg, main_kb())
                 self.send_response(200); self.end_headers(); return
 
-            # INCOME
-            if text == "Income":
-                user_states[chat_id] = {"step": "income_account"}
-                send(chat_id, "Select account:", account_kb())
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "income_account":
-                user_states[chat_id]["account"] = text
-                user_states[chat_id]["step"] = "income_amount"
-                send(chat_id, "Enter amount:")
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "income_amount":
-                if text.isdigit():
-                    add_transaction("Income",
-                                    int(text),
-                                    "",
-                                    state["account"])
-                    send(chat_id, "Income saved.", main_kb())
-                    user_states.pop(chat_id, None)
+            if text == "Close Month":
+                if monthly_closing():
+                    send(chat_id, "Monthly closing saved.", main_kb())
                 else:
-                    send(chat_id, "Numbers only.")
+                    send(chat_id, "Month already closed.", main_kb())
                 self.send_response(200); self.end_headers(); return
 
-            # EXPENSE
-            if text == "Expense":
-                user_states[chat_id] = {"step": "expense_account"}
-                send(chat_id, "Select account:", account_kb())
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "expense_account":
-                user_states[chat_id]["account"] = text
-                user_states[chat_id]["step"] = "expense_category"
-                send(chat_id, "Select category:", category_kb("Expense"))
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "expense_category":
-                user_states[chat_id]["category"] = text
-                user_states[chat_id]["step"] = "expense_amount"
-                send(chat_id, "Enter amount:")
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "expense_amount":
-                if text.isdigit():
-                    amount = int(text)
-                    balances = calculate_account_balance()
-                    account = state["account"]
-
-                    if balances.get(account, 0) < amount:
-                        send(chat_id,
-                             f"Saldo tidak cukup.\n"
-                             f"Saldo: {format_currency(balances.get(account,0))}")
-                        self.send_response(200); self.end_headers(); return
-
-                    add_transaction("Expense",
-                                    amount,
-                                    state["category"],
-                                    account)
-                    send(chat_id, "Expense saved.", main_kb())
-                    user_states.pop(chat_id, None)
-                else:
-                    send(chat_id, "Numbers only.")
-                self.send_response(200); self.end_headers(); return
-
-            # QUICK INPUT
             quick = parse_quick(text)
             if quick:
                 type_tx, amount, category, account = quick
-
-                if type_tx == "Expense":
-                    balances = calculate_account_balance()
-                    if balances.get(account, 0) < amount:
-                        send(chat_id,
-                             f"Saldo tidak cukup.\n"
-                             f"Saldo: {format_currency(balances.get(account,0))}")
-                        self.send_response(200); self.end_headers(); return
-
+                balances = calculate_account_balance()
+                if type_tx == "Expense" and balances.get(account,0) < amount:
+                    send(chat_id, "Saldo tidak cukup.", main_kb())
+                    self.send_response(200); self.end_headers(); return
                 add_transaction(type_tx, amount, category, account)
                 send(chat_id, "Saved.", main_kb())
                 self.send_response(200); self.end_headers(); return
 
             send(chat_id, "Main Menu:", main_kb())
-            self.send_response(200)
-            self.end_headers()
+            self.send_response(200); self.end_headers()
 
         except Exception as e:
             print("ERROR:", e)
