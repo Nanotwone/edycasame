@@ -122,7 +122,6 @@ def calculate_account_balance():
     for row in rows[1:]:
         if len(row) < 5:
             continue
-
         try:
             amount = int(float(row[2]))
         except:
@@ -222,11 +221,16 @@ class handler(BaseHTTPRequestHandler):
 
             # ================= INCOME =================
             if text == "Income":
+                accounts = get_accounts()
+                if not accounts:
+                    send(chat_id, "No accounts found. Add account first.", main_menu())
+                    self.send_response(200); self.end_headers(); return
+
                 user_states[chat_id] = {"flow": "income", "step": "account", "data": {}}
-                send(chat_id, "Select account:", [[acc] for acc in get_accounts()])
+                send(chat_id, "Select account:", [[acc] for acc in accounts])
                 self.send_response(200); self.end_headers(); return
 
-            if state and state["flow"] == "income":
+            if state and state.get("flow") == "income":
                 if state["step"] == "account":
                     if not account_exists(text):
                         send(chat_id, "Invalid account.")
@@ -256,11 +260,16 @@ class handler(BaseHTTPRequestHandler):
 
             # ================= EXPENSE =================
             if text == "Expense":
+                accounts = get_accounts()
+                if not accounts:
+                    send(chat_id, "No accounts found. Add account first.", main_menu())
+                    self.send_response(200); self.end_headers(); return
+
                 user_states[chat_id] = {"flow": "expense", "step": "account", "data": {}}
-                send(chat_id, "Select account:", [[acc] for acc in get_accounts()])
+                send(chat_id, "Select account:", [[acc] for acc in accounts])
                 self.send_response(200); self.end_headers(); return
 
-            if state and state["flow"] == "expense":
+            if state and state.get("flow") == "expense":
                 if state["step"] == "account":
                     if not account_exists(text):
                         send(chat_id, "Invalid account.")
@@ -303,11 +312,16 @@ class handler(BaseHTTPRequestHandler):
 
             # ================= TRANSFER =================
             if text == "Transfer":
+                accounts = get_accounts()
+                if not accounts:
+                    send(chat_id, "No accounts found.", main_menu())
+                    self.send_response(200); self.end_headers(); return
+
                 user_states[chat_id] = {"flow": "transfer", "step": "from", "data": {}}
-                send(chat_id, "Transfer from:", [[acc] for acc in get_accounts()])
+                send(chat_id, "Transfer from:", [[acc] for acc in accounts])
                 self.send_response(200); self.end_headers(); return
 
-            if state and state["flow"] == "transfer":
+            if state and state.get("flow") == "transfer":
                 if state["step"] == "from":
                     if not account_exists(text):
                         send(chat_id, "Invalid account.")
