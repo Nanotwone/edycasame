@@ -66,7 +66,6 @@ def delete_account(name):
     acc_rows = get_sheet("Accounts!A:A")
     header = acc_rows[0]
     remaining = [header]
-
     for row in acc_rows[1:]:
         if row[0].strip() != name:
             remaining.append(row)
@@ -107,6 +106,7 @@ def add_transaction(type_tx, amount, category, account, note=""):
 def calculate_account_balance():
     rows = get_sheet("Sheet1!A:F")
     balances = {}
+    total = 0
 
     for row in rows[1:]:
         if len(row) < 5:
@@ -123,41 +123,55 @@ def calculate_account_balance():
 
         if type_tx in ["income", "transfer-in"]:
             balances[account] += amount
+            total += amount
         elif type_tx in ["expense", "transfer-out"]:
             balances[account] -= amount
+            total -= amount
 
     for acc in get_accounts():
         balances.setdefault(acc, 0)
 
-    return balances
+    return balances, total
 
 # ================= ANALYTICS =================
 
 def get_all_expense_data():
     rows = get_sheet("Sheet1!A:F")
     data = {}
+    total = 0
+
     for row in rows[1:]:
         if len(row) < 5:
             continue
         if row[1].strip().lower() != "expense":
             continue
+
         category = row[3].strip()
         try:
             amount = int(float(row[2]))
         except:
             continue
-        data[category] = data.get(category, 0) + amount
-    return sorted(data.items(), key=lambda x: x[1], reverse=True)
 
-def format_expense_page(sorted_data, page=0, per_page=5):
+        total += amount
+        data[category] = data.get(category, 0) + amount
+
+    sorted_data = sorted(data.items(), key=lambda x: x[1], reverse=True)
+    return sorted_data, total
+
+def format_expense_page(sorted_data, total, page=0, per_page=5):
     start = page * per_page
     end = start + per_page
     slice_data = sorted_data[start:end]
+
     if not slice_data:
         return None
-    msg = f"All Expense by Category (Page {page+1})\n\n"
+
+    msg = f"Total Expense: €{total}\n\n"
+    msg += f"By Category (Page {page+1})\n\n"
+
     for i, (cat, amt) in enumerate(slice_data, start=start+1):
         msg += f"{i}. {cat} — €{amt}\n"
+
     return msg
 
 # ================= CLEAN =================
@@ -168,21 +182,6 @@ def quick_clean():
         spreadsheetId=SHEET_ID,
         range="Sheet1!A2:Z"
     ).execute()
-
-# ================= QUICK INPUT =================
-
-def parse_quick(text):
-    match = re.match(r"^([+-])(\d+)\s+(.+)$", text.strip())
-    if not match:
-        return None
-    sign, amount, rest = match.groups()
-    amount = int(amount)
-    parts = rest.split()
-    if sign == "+" and len(parts) >= 1:
-        return ("Income", amount, "", parts[0])
-    if sign == "-" and len(parts) >= 2:
-        return ("Expense", amount, parts[0], parts[1])
-    return None
 
 # ================= TELEGRAM =================
 
@@ -229,97 +228,26 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id, "Finance Bot Ready.", main_menu())
                 self.send_response(200); self.end_headers(); return
 
-            # QUICK CLEAN
-            if text == "QuickClean":
-                quick_clean()
-                user_states.pop(chat_id, None)
-                send(chat_id, "All transactions cleared.", main_menu())
-                self.send_response(200); self.end_headers(); return
-
-            # QUICK INPUT
-            quick = parse_quick(text)
-            if quick:
-                type_tx, amount, category, account = quick
-                balances = calculate_account_balance()
-                if type_tx == "Expense" and balances.get(account, 0) < amount:
-                    send(chat_id, "Insufficient balance.", main_menu())
-                else:
-                    add_transaction(type_tx, amount, category, account)
-                    send(chat_id, "Saved.", main_menu())
-                self.send_response(200); self.end_headers(); return
-
-            # ACCOUNT BALANCE
+            # ACCOUNT BALANCE WITH TOTAL
             if text == "Account Balance":
-                balances = calculate_account_balance()
+                balances, total = calculate_account_balance()
                 msg = ""
                 for acc, bal in balances.items():
                     msg += f"{acc}: {format_currency(bal)}\n"
+                msg += "\nTOTAL: " + format_currency(total)
                 send(chat_id, msg, main_menu())
                 self.send_response(200); self.end_headers(); return
 
-            # MANAGE ACCOUNT
-            if text == "Manage Account":
-                user_states[chat_id] = {"step": "manage_menu"}
-                send(chat_id, "1 Add\n2 Delete\n3 List\nType number.")
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "manage_menu":
-                if text == "1":
-                    user_states[chat_id] = {"step": "add_account"}
-                    send(chat_id, "Enter account name:")
-                elif text == "2":
-                    user_states[chat_id] = {"step": "delete_account"}
-                    send(chat_id, "Enter account name:")
-                elif text == "3":
-                    send(chat_id, "Accounts:\n" + "\n".join(get_accounts()), main_menu())
-                    user_states.pop(chat_id, None)
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "add_account":
-                add_account(text)
-                send(chat_id, "Account added.", main_menu())
-                user_states.pop(chat_id, None)
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "delete_account":
-                if delete_account(text):
-                    send(chat_id, "Account deleted.", main_menu())
-                else:
-                    send(chat_id, "Cannot delete. Account used.", main_menu())
-                user_states.pop(chat_id, None)
-                self.send_response(200); self.end_headers(); return
-
-            # INCOME
-            if text == "Income":
-                user_states[chat_id] = {"step": "income_account"}
-                send(chat_id, "Account?")
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "income_account":
-                user_states[chat_id]["account"] = text
-                user_states[chat_id]["step"] = "income_amount"
-                send(chat_id, "Amount?")
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "income_amount":
-                if text.isdigit():
-                    add_transaction("Income", int(text), "", state["account"])
-                    send(chat_id, "Income saved.", main_menu())
-                else:
-                    send(chat_id, "Numbers only.", main_menu())
-                user_states.pop(chat_id, None)
-                self.send_response(200); self.end_headers(); return
-
-            # TRANSFER
+            # TRANSFER FLOW FIXED
             if text == "Transfer":
                 user_states[chat_id] = {"step": "transfer_from"}
-                send(chat_id, "From account?")
+                send(chat_id, "Transfer from account?")
                 self.send_response(200); self.end_headers(); return
 
             if state and state.get("step") == "transfer_from":
                 user_states[chat_id]["from"] = text
                 user_states[chat_id]["step"] = "transfer_to"
-                send(chat_id, "To account?")
+                send(chat_id, "Transfer to account?")
                 self.send_response(200); self.end_headers(); return
 
             if state and state.get("step") == "transfer_to":
@@ -331,11 +259,11 @@ class handler(BaseHTTPRequestHandler):
             if state and state.get("step") == "transfer_amount":
                 if text.isdigit():
                     amount = int(text)
-                    balances = calculate_account_balance()
+                    balances, _ = calculate_account_balance()
                     if balances.get(state["from"], 0) >= amount:
                         add_transaction("Transfer-Out", amount, "Transfer", state["from"], f"To {state['to']}")
                         add_transaction("Transfer-In", amount, "Transfer", state["to"], f"From {state['from']}")
-                        send(chat_id, "Transfer saved.", main_menu())
+                        send(chat_id, "Transfer completed.", main_menu())
                     else:
                         send(chat_id, "Insufficient balance.", main_menu())
                 else:
@@ -343,70 +271,19 @@ class handler(BaseHTTPRequestHandler):
                 user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
-            # EXPENSE WITH NOTE
-            if text == "Expense":
-                user_states[chat_id] = {"step": "expense_category"}
-                send(chat_id, "Category?")
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "expense_category":
-                user_states[chat_id]["category"] = text
-                user_states[chat_id]["step"] = "expense_account"
-                send(chat_id, "Account?")
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "expense_account":
-                user_states[chat_id]["account"] = text
-                user_states[chat_id]["step"] = "expense_amount"
-                send(chat_id, "Amount?")
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "expense_amount":
-                if text.isdigit():
-                    amount = int(text)
-                    balances = calculate_account_balance()
-                    if balances.get(state["account"], 0) >= amount:
-                        user_states[chat_id]["amount"] = amount
-                        user_states[chat_id]["step"] = "expense_note_ask"
-                        send(chat_id, "Add detail note? (Yes/No)", [["Yes", "No"]])
-                        self.send_response(200); self.end_headers(); return
-                    else:
-                        send(chat_id, "Insufficient balance.", main_menu())
-                else:
-                    send(chat_id, "Numbers only.", main_menu())
-                user_states.pop(chat_id, None)
-                self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "expense_note_ask":
-                if text == "Yes":
-                    user_states[chat_id]["step"] = "expense_note_input"
-                    send(chat_id, "Enter detail:")
-                    self.send_response(200); self.end_headers(); return
-                elif text == "No":
-                    add_transaction("Expense", state["amount"], state["category"], state["account"], "")
-                    send(chat_id, "Expense saved.", main_menu())
-                    user_states.pop(chat_id, None)
-                    self.send_response(200); self.end_headers(); return
-
-            if state and state.get("step") == "expense_note_input":
-                add_transaction("Expense", state["amount"], state["category"], state["account"], text)
-                send(chat_id, "Expense saved with detail.", main_menu())
-                user_states.pop(chat_id, None)
-                self.send_response(200); self.end_headers(); return
-
-            # ANALYTICS
+            # ALL EXPENSE WITH TOTAL
             if text == "/all_expense":
-                data = get_all_expense_data()
+                data, total = get_all_expense_data()
                 if not data:
                     send(chat_id, "No expense recorded.", main_menu())
                 else:
-                    user_states[chat_id] = {"step": "expense_page", "data": data, "page": 0}
-                    send(chat_id, format_expense_page(data, 0), [["Next"]] if len(data) > 5 else main_menu())
+                    user_states[chat_id] = {"step": "expense_page", "data": data, "total": total, "page": 0}
+                    send(chat_id, format_expense_page(data, total, 0), [["Next"]] if len(data) > 5 else main_menu())
                 self.send_response(200); self.end_headers(); return
 
             if state and state.get("step") == "expense_page" and text == "Next":
                 page = state["page"] + 1
-                msg = format_expense_page(state["data"], page)
+                msg = format_expense_page(state["data"], state["total"], page)
                 if msg:
                     state["page"] = page
                     send(chat_id, msg, [["Next"]] if len(state["data"]) > (page+1)*5 else main_menu())
