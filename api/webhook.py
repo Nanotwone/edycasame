@@ -187,7 +187,7 @@ def send(chat_id, text, keyboard=None):
 
 def main_menu():
     return [
-        ["/all_expense"],
+        ["Today"],
         ["Account Balance"],
         ["Income", "Expense"],
         ["Transfer"],
@@ -411,7 +411,7 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200); self.end_headers(); return
 
             # ================= ALL EXPENSE =================
-            if text == "/all_expense":
+            if text == "Today":
                 data_exp, total = get_all_expense_data()
                 if not data_exp:
                     send(chat_id, "No expense recorded.", main_menu())
