@@ -71,8 +71,8 @@ def delete_account(name):
 
     header = acc_rows[0]
     remaining = [header]
-
     found = False
+
     for row in acc_rows[1:]:
         if row[0].strip() == name:
             found = True
@@ -139,7 +139,6 @@ def calculate_account_balance():
         elif type_tx in ["Expense", "Transfer-Out"]:
             account_map[account] -= amount
 
-    # ensure all accounts appear
     for acc in get_accounts():
         if acc not in account_map:
             account_map[acc] = 0
@@ -173,6 +172,7 @@ def monthly_closing():
 
     balances = calculate_account_balance()
     rows = []
+
     for acc, bal in balances.items():
         rows.append([month, acc, bal])
 
@@ -235,9 +235,21 @@ def parse_quick(text):
 
 # ================= TELEGRAM =================
 
-def send(chat_id, text):
+def send(chat_id, text, keyboard=None):
     payload = {"chat_id": chat_id, "text": text}
+    if keyboard:
+        payload["reply_markup"] = {
+            "keyboard": keyboard,
+            "resize_keyboard": True
+        }
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
+
+def main_menu():
+    return [
+        ["Account Balance", "Transfer"],
+        ["Manage Account", "Close Month"],
+        ["/daily"]
+    ]
 
 # ================= HANDLER =================
 
@@ -259,13 +271,14 @@ class handler(BaseHTTPRequestHandler):
 
             state = user_states.get(chat_id)
 
-            # START
             if text == "/start":
-                send(chat_id, "Ready.\nCommands:\n+1000 Cash\n-200 Food Cash\nTransfer\nAccount Balance\nManage Account\nClose Month\n/daily")
+                send(chat_id,
+                     "Finance Bot Ready.\nQuick input:\n+1000 Cash\n-200 Food Cash",
+                     main_menu())
                 self.send_response(200); self.end_headers(); return
 
             if text == "/daily":
-                send(chat_id, daily_summary())
+                send(chat_id, daily_summary(), main_menu())
                 self.send_response(200); self.end_headers(); return
 
             if text == "Account Balance":
@@ -273,7 +286,7 @@ class handler(BaseHTTPRequestHandler):
                 msg = ""
                 for acc, bal in balances.items():
                     msg += f"{acc}: {format_currency(bal)}\n"
-                send(chat_id, msg)
+                send(chat_id, msg, main_menu())
                 self.send_response(200); self.end_headers(); return
 
             # MANAGE ACCOUNT
@@ -299,21 +312,21 @@ class handler(BaseHTTPRequestHandler):
                     msg = "Accounts:\n"
                     for a in accounts:
                         msg += f"- {a}\n"
-                    send(chat_id, msg)
+                    send(chat_id, msg, main_menu())
                     user_states.pop(chat_id, None)
                     self.send_response(200); self.end_headers(); return
 
             if state and state.get("step") == "add_account":
                 add_account(text)
-                send(chat_id, "Account added.")
+                send(chat_id, "Account added.", main_menu())
                 user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
             if state and state.get("step") == "delete_account":
                 if delete_account(text):
-                    send(chat_id, "Account deleted.")
+                    send(chat_id, "Account deleted.", main_menu())
                 else:
-                    send(chat_id, "Cannot delete. Account used or not found.")
+                    send(chat_id, "Cannot delete. Account used or not found.", main_menu())
                 user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
@@ -337,7 +350,8 @@ class handler(BaseHTTPRequestHandler):
 
             if state and state.get("step") == "transfer_amount":
                 if not text.isdigit():
-                    send(chat_id, "Numbers only.")
+                    send(chat_id, "Numbers only.", main_menu())
+                    user_states.pop(chat_id, None)
                     self.send_response(200); self.end_headers(); return
 
                 amount = int(text)
@@ -345,27 +359,27 @@ class handler(BaseHTTPRequestHandler):
                 to_acc = state["to"]
 
                 if from_acc == to_acc:
-                    send(chat_id, "Cannot transfer to same account.")
+                    send(chat_id, "Cannot transfer to same account.", main_menu())
                     user_states.pop(chat_id, None)
                     self.send_response(200); self.end_headers(); return
 
                 balances = calculate_account_balance()
                 if balances.get(from_acc, 0) < amount:
-                    send(chat_id, "Insufficient balance.")
+                    send(chat_id, "Insufficient balance.", main_menu())
                     user_states.pop(chat_id, None)
                     self.send_response(200); self.end_headers(); return
 
                 transfer_funds(amount, from_acc, to_acc)
-                send(chat_id, "Transfer saved.")
+                send(chat_id, "Transfer saved.", main_menu())
                 user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
             # CLOSE MONTH
             if text == "Close Month":
                 if monthly_closing():
-                    send(chat_id, "Monthly closing saved.")
+                    send(chat_id, "Monthly closing saved.", main_menu())
                 else:
-                    send(chat_id, "Month already closed.")
+                    send(chat_id, "Month already closed.", main_menu())
                 self.send_response(200); self.end_headers(); return
 
             # QUICK INPUT
@@ -373,14 +387,16 @@ class handler(BaseHTTPRequestHandler):
             if quick:
                 type_tx, amount, category, account = quick
                 balances = calculate_account_balance()
+
                 if type_tx == "Expense" and balances.get(account, 0) < amount:
-                    send(chat_id, "Insufficient balance.")
+                    send(chat_id, "Insufficient balance.", main_menu())
                     self.send_response(200); self.end_headers(); return
+
                 add_transaction(type_tx, amount, category, account)
-                send(chat_id, "Saved.")
+                send(chat_id, "Saved.", main_menu())
                 self.send_response(200); self.end_headers(); return
 
-            send(chat_id, "Unknown command. Type /start")
+            send(chat_id, "Unknown command.", main_menu())
             self.send_response(200); self.end_headers()
 
         except Exception as e:
