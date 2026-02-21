@@ -245,18 +245,11 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id, "Finance Bot Ready.", main_menu())
                 self.send_response(200); self.end_headers(); return
 
-            # QUICK INPUT
-            quick = parse_quick(text)
-            if quick:
-                type_tx, amount, category, account = quick
-                balances = calculate_account_balance()
-
-                if type_tx == "Expense" and balances.get(account, 0) < amount:
-                    send(chat_id, "Insufficient balance.", main_menu())
-                    self.send_response(200); self.end_headers(); return
-
-                add_transaction(type_tx, amount, category, account)
-                send(chat_id, "Saved.", main_menu())
+            # QUICK CLEAN
+            if text == "QuickClean":
+                quick_clean()
+                user_states.pop(chat_id, None)
+                send(chat_id, "All transactions cleared (Sheet1 A2:Z).", main_menu())
                 self.send_response(200); self.end_headers(); return
 
             # ACCOUNT BALANCE
@@ -268,8 +261,7 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id, msg, main_menu())
                 self.send_response(200); self.end_headers(); return
 
-            # ================= EXPENSE FLOW WITH OPTIONAL NOTE =================
-
+            # EXPENSE FLOW WITH NOTE
             if text == "Expense":
                 user_states[chat_id] = {"step": "expense_category"}
                 send(chat_id, "Category?")
@@ -339,8 +331,7 @@ class handler(BaseHTTPRequestHandler):
                 user_states.pop(chat_id, None)
                 self.send_response(200); self.end_headers(); return
 
-            # ================= ALL EXPENSE PAGINATION =================
-
+            # ALL EXPENSE PAGINATION
             if text == "/all_expense":
                 data = get_all_expense_data()
                 if not data:
