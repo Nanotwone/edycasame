@@ -187,12 +187,12 @@ def send(chat_id, text, keyboard=None):
 
 def main_menu():
     return [
+        ["/all_expense"]
+        ["Account Balance"],
         ["Income", "Expense"],
         ["Transfer"],
-        ["Account Balance"],
         ["Manage Account"],
         ["QuickClean"],
-        ["/all_expense"]
     ]
 
 # ================= HANDLER =================
