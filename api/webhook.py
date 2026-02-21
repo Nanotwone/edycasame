@@ -122,6 +122,7 @@ def calculate_account_balance():
     for row in rows[1:]:
         if len(row) < 5:
             continue
+
         try:
             amount = int(float(row[2]))
         except:
@@ -241,20 +242,14 @@ class handler(BaseHTTPRequestHandler):
                         send(chat_id, "Invalid amount.")
                         self.send_response(200); self.end_headers(); return
                     state["data"]["amount"] = amount
-                    state["step"] = "category"
-                    send(chat_id, "Enter category:")
-                    self.send_response(200); self.end_headers(); return
-
-                if state["step"] == "category":
-                    state["data"]["category"] = text
                     state["step"] = "note"
                     send(chat_id, "Enter note (or type skip):")
                     self.send_response(200); self.end_headers(); return
 
                 if state["step"] == "note":
-                    state["data"]["note"] = "" if text.lower() == "skip" else text
+                    note = "" if text.lower() == "skip" else text
                     d = state["data"]
-                    add_transaction("Income", d["amount"], d["category"], d["account"], d["note"])
+                    add_transaction("Income", d["amount"], "", d["account"], note)
                     send(chat_id, "Income recorded.", main_menu())
                     user_states.pop(chat_id)
                     self.send_response(200); self.end_headers(); return
@@ -299,9 +294,9 @@ class handler(BaseHTTPRequestHandler):
                     self.send_response(200); self.end_headers(); return
 
                 if state["step"] == "note":
-                    state["data"]["note"] = "" if text.lower() == "skip" else text
+                    note = "" if text.lower() == "skip" else text
                     d = state["data"]
-                    add_transaction("Expense", d["amount"], d["category"], d["account"], d["note"])
+                    add_transaction("Expense", d["amount"], d["category"], d["account"], note)
                     send(chat_id, "Expense recorded.", main_menu())
                     user_states.pop(chat_id)
                     self.send_response(200); self.end_headers(); return
