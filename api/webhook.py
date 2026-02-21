@@ -1,4 +1,4 @@
-from http.server import BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import requests
 import os
@@ -121,7 +121,6 @@ def calculate_account_balance():
             continue
 
         account = row[4]
-
         balances.setdefault(account, 0)
 
         if type_tx in ["Income", "Transfer-In"]:
@@ -134,44 +133,50 @@ def calculate_account_balance():
 
     return balances
 
-# ================= ANALYTICS =================
+# ================= ANALYTICS (MONTH PAGINATION) =================
 
-def top_expense(period="today", top_n=3):
+def get_month_expense_data():
     rows = get_sheet("Sheet1!A:F")
     now = now_wib()
-    today = now.strftime("%Y-%m-%d")
-    month = now.strftime("%Y-%m")
-
     data = {}
 
     for row in rows[1:]:
         if len(row) < 6:
             continue
 
-        date = row[0]
-        type_tx = row[1]
-
-        if type_tx != "Expense":
+        if row[1] != "Expense":
             continue
 
-        if period == "today" and not date.startswith(today):
+        try:
+            raw_date = row[0].strip().lstrip("'")
+            tx_date = datetime.strptime(raw_date, "%Y-%m-%d %H:%M:%S")
+        except:
             continue
 
-        if period == "month" and not date.startswith(month):
+        if tx_date.year != now.year or tx_date.month != now.month:
             continue
 
         category = row[3]
-        amount = int(float(row[2]))
+        try:
+            amount = int(float(row[2]))
+        except:
+            continue
 
         data[category] = data.get(category, 0) + amount
 
-    if not data:
-        return "No expense recorded."
+    return sorted(data.items(), key=lambda x: x[1], reverse=True)
 
-    sorted_data = sorted(data.items(), key=lambda x: x[1], reverse=True)
+def format_expense_page(sorted_data, page=0, per_page=5):
+    start = page * per_page
+    end = start + per_page
+    slice_data = sorted_data[start:end]
 
-    msg = f"Top {top_n} Expense ({period})\n\n"
-    for i, (cat, amt) in enumerate(sorted_data[:top_n], 1):
+    if not slice_data:
+        return None
+
+    msg = f"Top Expense This Month (Page {page+1})\n\n"
+
+    for i, (cat, amt) in enumerate(slice_data, start=start+1):
         msg += f"{i}. {cat} — €{amt}\n"
 
     return msg
@@ -222,7 +227,7 @@ def main_menu():
         ["Account Balance"],
         ["Manage Account"],
         ["QuickClean"],
-        ["/top_today", "/top_month"]
+        ["/top_month"]
     ]
 
 # ================= HANDLER =================
@@ -254,9 +259,11 @@ class handler(BaseHTTPRequestHandler):
             if quick:
                 type_tx, amount, category, account = quick
                 balances = calculate_account_balance()
+
                 if type_tx == "Expense" and balances.get(account, 0) < amount:
                     send(chat_id, "Insufficient balance.", main_menu())
                     self.send_response(200); self.end_headers(); return
+
                 add_transaction(type_tx, amount, category, account)
                 send(chat_id, "Saved.", main_menu())
                 self.send_response(200); self.end_headers(); return
@@ -368,17 +375,14 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200); self.end_headers(); return
 
             if state and state.get("step") == "manage_account":
-
                 if text == "1":
                     user_states[chat_id] = {"step": "add_account"}
                     send(chat_id, "Enter account name:")
                     self.send_response(200); self.end_headers(); return
-
                 if text == "2":
                     user_states[chat_id] = {"step": "delete_account"}
                     send(chat_id, "Enter account name to delete:")
                     self.send_response(200); self.end_headers(); return
-
                 if text == "3":
                     accounts = get_accounts()
                     send(chat_id, "Accounts:\n" + "\n".join(accounts), main_menu())
@@ -405,14 +409,47 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id, "All transactions cleared.", main_menu())
                 self.send_response(200); self.end_headers(); return
 
-            # ANALYTICS
-            if text == "/top_today":
-                send(chat_id, top_expense("today"), main_menu())
+            # MONTH PAGINATION
+            if text == "/top_month":
+                data = get_month_expense_data()
+                if not data:
+                    send(chat_id, "No expense recorded this month.", main_menu())
+                    self.send_response(200); self.end_headers(); return
+
+                user_states[chat_id] = {
+                    "step": "expense_pagination",
+                    "data": data,
+                    "page": 0
+                }
+
+                msg = format_expense_page(data, 0)
+                keyboard = [["Next"]] if len(data) > 5 else main_menu()
+
+                send(chat_id, msg, keyboard)
                 self.send_response(200); self.end_headers(); return
 
-            if text == "/top_month":
-                send(chat_id, top_expense("month"), main_menu())
-                self.send_response(200); self.end_headers(); return
+            if state and state.get("step") == "expense_pagination":
+                if text == "Next":
+                    page = state["page"] + 1
+                    data = state["data"]
+                    msg = format_expense_page(data, page)
+
+                    if not msg:
+                        send(chat_id, "No more data.", main_menu())
+                        user_states.pop(chat_id, None)
+                        self.send_response(200); self.end_headers(); return
+
+                    state["page"] = page
+
+                    remaining = len(data) - ((page+1)*5)
+                    if remaining > 0:
+                        keyboard = [["Next"]]
+                    else:
+                        keyboard = main_menu()
+                        user_states.pop(chat_id, None)
+
+                    send(chat_id, msg, keyboard)
+                    self.send_response(200); self.end_headers(); return
 
             send(chat_id, "Unknown command.", main_menu())
             self.send_response(200); self.end_headers()
@@ -426,3 +463,9 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot running")
+
+if __name__ == "__main__":
+    PORT = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("", PORT), handler)
+    print(f"Server running on port {PORT}")
+    server.serve_forever()
