@@ -32,6 +32,22 @@ def parse_amount(text):
     except:
         return None
 
+def keyboard_3col(items):
+    keyboard = []
+    row = []
+
+    for item in items:
+        row.append(item)
+
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+
+    if row:
+        keyboard.append(row)
+
+    return keyboard
+
 def get_service():
     if not GOOGLE_CREDENTIALS:
         raise ValueError("GOOGLE_CREDENTIALS environment variable not set")
@@ -277,7 +293,7 @@ class handler(BaseHTTPRequestHandler):
                     "data": {}
                 }
 
-                send(chat_id, "Select account:", [[acc] for acc in accounts])
+                send(chat_id, "Select account:", keyboard_3col(accounts))
 
                 self.send_response(200)
                 self.end_headers()
@@ -360,7 +376,7 @@ class handler(BaseHTTPRequestHandler):
                     "data": {}
                 }
 
-                send(chat_id, "Select account:", [[acc] for acc in accounts])
+                send(chat_id, "Select account:", keyboard_3col(accounts))
 
                 self.send_response(200)
                 self.end_headers()
@@ -464,7 +480,7 @@ class handler(BaseHTTPRequestHandler):
                     "data": {}
                 }
 
-                send(chat_id, "Transfer from:", [[acc] for acc in accounts])
+                send(chat_id, "Transfer from:", keyboard_3col(accounts))
 
                 self.send_response(200)
                 self.end_headers()
@@ -483,7 +499,7 @@ class handler(BaseHTTPRequestHandler):
                     state["data"]["from"] = text
                     state["step"] = "to"
 
-                    send(chat_id, "Transfer to:", [[acc] for acc in get_accounts()])
+                    send(chat_id, "Transfer to:", keyboard_3col(get_accounts()))
 
                     self.send_response(200)
                     self.end_headers()
