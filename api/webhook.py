@@ -33,11 +33,16 @@ def parse_amount(text):
         return None
 
 def get_service():
+    if not GOOGLE_CREDENTIALS:
+        raise ValueError("GOOGLE_CREDENTIALS environment variable not set")
+
     credentials_info = json.loads(GOOGLE_CREDENTIALS)
+
     credentials = service_account.Credentials.from_service_account_info(
         credentials_info,
         scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
+
     return build("sheets", "v4", credentials=credentials)
 
 def get_sheet(range_name):
@@ -70,18 +75,22 @@ def add_account(name):
 
 def delete_account(name):
     rows = get_sheet("Sheet1!A:F")
+
     for row in rows[1:]:
         if len(row) >= 5 and row[4].strip() == name:
             return False
 
     acc_rows = get_sheet("Accounts!A:A")
     header = acc_rows[0]
+
     remaining = [header]
+
     for row in acc_rows[1:]:
         if row[0].strip() != name:
             remaining.append(row)
 
     service = get_service()
+
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
         range="Accounts!A2:A"
@@ -100,28 +109,33 @@ def delete_account(name):
 
 def add_transaction(type_tx, amount, category, account, note=""):
     service = get_service()
+
     service.spreadsheets().values().append(
         spreadsheetId=SHEET_ID,
         range="Sheet1!A:F",
         valueInputOption="RAW",
-        body={"values": [[
-            now_wib().strftime("%Y-%m-%d %H:%M:%S"),
-            type_tx,
-            amount,
-            category,
-            account,
-            note
-        ]]}
+        body={
+            "values": [[
+                now_wib().strftime("%Y-%m-%d %H:%M:%S"),
+                type_tx,
+                amount,
+                category,
+                account,
+                note
+            ]]
+        }
     ).execute()
 
 def calculate_account_balance():
     rows = get_sheet("Sheet1!A:F")
+
     balances = {}
     total = 0
 
     for row in rows[1:]:
         if len(row) < 5:
             continue
+
         try:
             amount = int(float(row[2]))
         except:
@@ -129,11 +143,13 @@ def calculate_account_balance():
 
         type_tx = row[1].strip().lower()
         account = row[4].strip()
+
         balances.setdefault(account, 0)
 
         if type_tx in ["income", "transfer-in"]:
             balances[account] += amount
             total += amount
+
         elif type_tx in ["expense", "transfer-out"]:
             balances[account] -= amount
             total -= amount
@@ -147,12 +163,14 @@ def calculate_account_balance():
 
 def get_all_expense_data():
     rows = get_sheet("Sheet1!A:F")
+
     data = {}
     total = 0
 
     for row in rows[1:]:
         if len(row) < 5:
             continue
+
         if row[1].strip().lower() != "expense":
             continue
 
@@ -162,16 +180,19 @@ def get_all_expense_data():
             continue
 
         category = row[3].strip()
+
         total += amount
         data[category] = data.get(category, 0) + amount
 
     sorted_data = sorted(data.items(), key=lambda x: x[1], reverse=True)
+
     return sorted_data, total
 
 # ================= CLEAN =================
 
 def quick_clean():
     service = get_service()
+
     service.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID,
         range="Sheet1!A2:Z"
@@ -180,15 +201,26 @@ def quick_clean():
 # ================= TELEGRAM =================
 
 def send(chat_id, text, keyboard=None):
-    payload = {"chat_id": chat_id, "text": text}
+    payload = {
+        "chat_id": chat_id,
+        "text": text
+    }
+
     if keyboard:
-        payload["reply_markup"] = {"keyboard": keyboard, "resize_keyboard": True}
-    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
+        payload["reply_markup"] = {
+            "keyboard": keyboard,
+            "resize_keyboard": True
+        }
+
+    requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+        json=payload
+    )
 
 def main_menu():
     return [
         ["Spending","Balance"],
-        ["Income","Transfer","Expense"]
+        ["Income","Transfer","Expense"],
         ["Management","QuickClean"],
     ]
 
@@ -197,258 +229,503 @@ def main_menu():
 class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
+
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
 
         try:
             data = json.loads(body)
+
+            if "message" not in data:
+                self.send_response(200)
+                self.end_headers()
+                return
+
             message = data.get("message", {})
             chat_id = message.get("chat", {}).get("id")
             text = message.get("text", "").strip()
             user_id = message.get("from", {}).get("id")
 
             if user_id not in ALLOWED_USERS:
-                self.send_response(200); self.end_headers(); return
+                self.send_response(200)
+                self.end_headers()
+                return
 
             state = user_states.get(chat_id)
 
             if text == "/start":
                 send(chat_id, "Finance Bot Ready.", main_menu())
-                self.send_response(200); self.end_headers(); return
+                self.send_response(200)
+                self.end_headers()
+                return
 
             # ================= INCOME =================
+
             if text == "Income":
+
                 accounts = get_accounts()
+
                 if not accounts:
                     send(chat_id, "No accounts found. Add account first.", main_menu())
-                    self.send_response(200); self.end_headers(); return
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
-                user_states[chat_id] = {"flow": "income", "step": "account", "data": {}}
+                user_states[chat_id] = {
+                    "flow": "income",
+                    "step": "account",
+                    "data": {}
+                }
+
                 send(chat_id, "Select account:", [[acc] for acc in accounts])
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             if state and state.get("flow") == "income":
+
                 if state["step"] == "account":
+
                     if not account_exists(text):
                         send(chat_id, "Invalid account.")
-                        self.send_response(200); self.end_headers(); return
+                        self.send_response(200)
+                        self.end_headers()
+                        return
+
                     state["data"]["account"] = text
                     state["step"] = "amount"
+
                     send(chat_id, "Enter amount:")
-                    self.send_response(200); self.end_headers(); return
+
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
                 if state["step"] == "amount":
+
                     amount = parse_amount(text)
+
                     if not amount:
                         send(chat_id, "Invalid amount.")
-                        self.send_response(200); self.end_headers(); return
+                        self.send_response(200)
+                        self.end_headers()
+                        return
+
                     state["data"]["amount"] = amount
                     state["step"] = "note"
+
                     send(chat_id, "Enter note (or type skip):")
-                    self.send_response(200); self.end_headers(); return
+
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
                 if state["step"] == "note":
+
                     note = "" if text.lower() == "skip" else text
                     d = state["data"]
-                    add_transaction("Income", d["amount"], "", d["account"], note)
+
+                    add_transaction(
+                        "Income",
+                        d["amount"],
+                        "",
+                        d["account"],
+                        note
+                    )
+
                     send(chat_id, "Income recorded.", main_menu())
+
                     user_states.pop(chat_id)
-                    self.send_response(200); self.end_headers(); return
+
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
             # ================= EXPENSE =================
+
             if text == "Expense":
+
                 accounts = get_accounts()
+
                 if not accounts:
                     send(chat_id, "No accounts found. Add account first.", main_menu())
-                    self.send_response(200); self.end_headers(); return
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
-                user_states[chat_id] = {"flow": "expense", "step": "account", "data": {}}
+                user_states[chat_id] = {
+                    "flow": "expense",
+                    "step": "account",
+                    "data": {}
+                }
+
                 send(chat_id, "Select account:", [[acc] for acc in accounts])
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             if state and state.get("flow") == "expense":
+
                 if state["step"] == "account":
+
                     if not account_exists(text):
                         send(chat_id, "Invalid account.")
-                        self.send_response(200); self.end_headers(); return
+                        self.send_response(200)
+                        self.end_headers()
+                        return
+
                     state["data"]["account"] = text
                     state["step"] = "amount"
+
                     send(chat_id, "Enter amount:")
-                    self.send_response(200); self.end_headers(); return
+
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
                 if state["step"] == "amount":
+
                     amount = parse_amount(text)
+
                     if not amount:
                         send(chat_id, "Invalid amount.")
-                        self.send_response(200); self.end_headers(); return
+                        self.send_response(200)
+                        self.end_headers()
+                        return
 
                     balances, _ = calculate_account_balance()
+
                     if balances.get(state["data"]["account"], 0) < amount:
                         send(chat_id, "Insufficient balance.", main_menu())
                         user_states.pop(chat_id)
-                        self.send_response(200); self.end_headers(); return
+
+                        self.send_response(200)
+                        self.end_headers()
+                        return
 
                     state["data"]["amount"] = amount
                     state["step"] = "category"
+
                     send(chat_id, "Enter category:")
-                    self.send_response(200); self.end_headers(); return
+
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
                 if state["step"] == "category":
+
                     state["data"]["category"] = text
                     state["step"] = "note"
+
                     send(chat_id, "Enter note (or type skip):")
-                    self.send_response(200); self.end_headers(); return
+
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
                 if state["step"] == "note":
+
                     note = "" if text.lower() == "skip" else text
                     d = state["data"]
-                    add_transaction("Expense", d["amount"], d["category"], d["account"], note)
+
+                    add_transaction(
+                        "Expense",
+                        d["amount"],
+                        d["category"],
+                        d["account"],
+                        note
+                    )
+
                     send(chat_id, "Expense recorded.", main_menu())
+
                     user_states.pop(chat_id)
-                    self.send_response(200); self.end_headers(); return
+
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
             # ================= TRANSFER =================
+
             if text == "Transfer":
+
                 accounts = get_accounts()
+
                 if not accounts:
                     send(chat_id, "No accounts found.", main_menu())
-                    self.send_response(200); self.end_headers(); return
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
-                user_states[chat_id] = {"flow": "transfer", "step": "from", "data": {}}
+                user_states[chat_id] = {
+                    "flow": "transfer",
+                    "step": "from",
+                    "data": {}
+                }
+
                 send(chat_id, "Transfer from:", [[acc] for acc in accounts])
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             if state and state.get("flow") == "transfer":
+
                 if state["step"] == "from":
+
                     if not account_exists(text):
                         send(chat_id, "Invalid account.")
-                        self.send_response(200); self.end_headers(); return
+                        self.send_response(200)
+                        self.end_headers()
+                        return
+
                     state["data"]["from"] = text
                     state["step"] = "to"
+
                     send(chat_id, "Transfer to:", [[acc] for acc in get_accounts()])
-                    self.send_response(200); self.end_headers(); return
+
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
                 if state["step"] == "to":
+
                     if not account_exists(text) or text == state["data"]["from"]:
                         send(chat_id, "Invalid destination.")
-                        self.send_response(200); self.end_headers(); return
+                        self.send_response(200)
+                        self.end_headers()
+                        return
+
                     state["data"]["to"] = text
                     state["step"] = "amount"
+
                     send(chat_id, "Enter amount:")
-                    self.send_response(200); self.end_headers(); return
+
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
                 if state["step"] == "amount":
+
                     amount = parse_amount(text)
+
                     if not amount:
                         send(chat_id, "Invalid amount.")
-                        self.send_response(200); self.end_headers(); return
+                        self.send_response(200)
+                        self.end_headers()
+                        return
 
                     balances, _ = calculate_account_balance()
+
                     if balances.get(state["data"]["from"], 0) < amount:
                         send(chat_id, "Insufficient balance.", main_menu())
                         user_states.pop(chat_id)
-                        self.send_response(200); self.end_headers(); return
 
-                    add_transaction("Transfer-Out", amount, "Transfer", state["data"]["from"], f"To {state['data']['to']}")
-                    add_transaction("Transfer-In", amount, "Transfer", state["data"]["to"], f"From {state['data']['from']}")
+                        self.send_response(200)
+                        self.end_headers()
+                        return
+
+                    add_transaction(
+                        "Transfer-Out",
+                        amount,
+                        "Transfer",
+                        state["data"]["from"],
+                        f"To {state['data']['to']}"
+                    )
+
+                    add_transaction(
+                        "Transfer-In",
+                        amount,
+                        "Transfer",
+                        state["data"]["to"],
+                        f"From {state['data']['from']}"
+                    )
+
                     send(chat_id, "Transfer completed.", main_menu())
+
                     user_states.pop(chat_id)
-                    self.send_response(200); self.end_headers(); return
+
+                    self.send_response(200)
+                    self.end_headers()
+                    return
 
             # ================= Balance =================
+
             if text == "Balance":
+
                 balances, total = calculate_account_balance()
+
                 msg = ""
+
                 for acc, bal in sorted(balances.items(), key=lambda x: x[1], reverse=True):
                     msg += f"{acc}: {format_currency(bal)}\n"
+
                 msg += "\nTOTAL: " + format_currency(total)
+
                 send(chat_id, msg, main_menu())
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             # ================= Management =================
+
             if text == "Management":
+
                 send(chat_id, "Management:", [["List"], ["Add"], ["Delete"], ["Back"]])
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             if text == "List":
+
                 balances, _ = calculate_account_balance()
+
                 msg = ""
+
                 for acc in get_accounts():
                     msg += f"{acc}: {format_currency(balances.get(acc,0))}\n"
+
                 send(chat_id, msg, main_menu())
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             if text == "Add":
+
                 user_states[chat_id] = {"flow": "add_account"}
+
                 send(chat_id, "Enter new account name:")
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             if state and state.get("flow") == "add_account":
+
                 if account_exists(text):
                     send(chat_id, "Account already exists.", main_menu())
                 else:
                     add_account(text)
                     send(chat_id, "Account added.", main_menu())
+
                 user_states.pop(chat_id)
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             if text == "Delete":
+
                 user_states[chat_id] = {"flow": "delete_account"}
+
                 send(chat_id, "Enter account name to delete:")
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             if state and state.get("flow") == "delete_account":
+
                 if not account_exists(text):
                     send(chat_id, "Account not found.", main_menu())
+
                 elif not delete_account(text):
                     send(chat_id, "Account has transactions. Cannot delete.", main_menu())
+
                 else:
                     send(chat_id, "Account deleted.", main_menu())
+
                 user_states.pop(chat_id)
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             # ================= ALL EXPENSE =================
+
             if text == "Spending":
+
                 data_exp, total = get_all_expense_data()
+
                 if not data_exp:
                     send(chat_id, "No expense recorded.", main_menu())
+
                 else:
+
                     msg = f"Total Expense: {format_currency(total)}\n\n"
+
                     for i, (cat, amt) in enumerate(data_exp, start=1):
                         msg += f"{i}. {cat} — {format_currency(amt)}\n"
+
                     send(chat_id, msg, main_menu())
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             # ================= QUICK CLEAN =================
+
             if text == "QuickClean":
+
                 user_states[chat_id] = {"flow": "clean_confirm"}
+
                 send(chat_id, "Type YES to confirm deleting all transactions.")
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             if state and state.get("flow") == "clean_confirm":
+
                 if text == "YES":
                     quick_clean()
                     send(chat_id, "All transactions deleted.", main_menu())
+
                 else:
                     send(chat_id, "Cancelled.", main_menu())
+
                 user_states.pop(chat_id)
-                self.send_response(200); self.end_headers(); return
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             send(chat_id, "Use menu.", main_menu())
-            self.send_response(200); self.end_headers()
+
+            self.send_response(200)
+            self.end_headers()
 
         except Exception as e:
+
             print("ERROR:", e)
+
             self.send_response(200)
             self.end_headers()
 
     def do_GET(self):
+
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot running")
 
+# ================= SERVER =================
+
 if __name__ == "__main__":
+
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN environment variable not set")
+
+    if not SHEET_ID:
+        raise ValueError("SHEET_ID environment variable not set")
+
     PORT = int(os.environ.get("PORT", 8080))
+
     server = HTTPServer(("", PORT), handler)
-    print("Server running...")
+
+    print("Server running on port", PORT)
+
     server.serve_forever()
