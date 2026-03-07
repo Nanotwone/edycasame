@@ -187,12 +187,9 @@ def send(chat_id, text, keyboard=None):
 
 def main_menu():
     return [
-        ["Today"],
-        ["Account Balance"],
-        ["Income", "Expense"],
-        ["Transfer"],
-        ["Manage Account"],
-        ["QuickClean"],
+        ["Spending","Balance"],
+        ["Income","Transfer","Expense"]
+        ["Management","QuickClean"],
     ]
 
 # ================= HANDLER =================
@@ -358,8 +355,8 @@ class handler(BaseHTTPRequestHandler):
                     user_states.pop(chat_id)
                     self.send_response(200); self.end_headers(); return
 
-            # ================= ACCOUNT BALANCE =================
-            if text == "Account Balance":
+            # ================= Balance =================
+            if text == "Balance":
                 balances, total = calculate_account_balance()
                 msg = ""
                 for acc, bal in sorted(balances.items(), key=lambda x: x[1], reverse=True):
@@ -368,9 +365,9 @@ class handler(BaseHTTPRequestHandler):
                 send(chat_id, msg, main_menu())
                 self.send_response(200); self.end_headers(); return
 
-            # ================= MANAGE ACCOUNT =================
-            if text == "Manage Account":
-                send(chat_id, "Manage Account:", [["List"], ["Add"], ["Delete"], ["Back"]])
+            # ================= Management =================
+            if text == "Management":
+                send(chat_id, "Management:", [["List"], ["Add"], ["Delete"], ["Back"]])
                 self.send_response(200); self.end_headers(); return
 
             if text == "List":
@@ -411,7 +408,7 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200); self.end_headers(); return
 
             # ================= ALL EXPENSE =================
-            if text == "Today":
+            if text == "Spending":
                 data_exp, total = get_all_expense_data()
                 if not data_exp:
                     send(chat_id, "No expense recorded.", main_menu())
