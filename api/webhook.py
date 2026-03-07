@@ -46,6 +46,8 @@ def keyboard_3col(items):
     if row:
         keyboard.append(row)
 
+    keyboard.append(["Back"])
+
     return keyboard
 
 def get_service():
@@ -268,6 +270,17 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             state = user_states.get(chat_id)
+
+            # BACK HANDLER
+            if text == "Back":
+                if chat_id in user_states:
+                    user_states.pop(chat_id)
+
+                send(chat_id, "Back to main menu.", main_menu())
+
+                self.send_response(200)
+                self.end_headers()
+                return
 
             if text == "/start":
                 send(chat_id, "Finance Bot Ready.", main_menu())
