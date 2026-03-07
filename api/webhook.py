@@ -38,7 +38,6 @@ def keyboard_3col(items):
 
     for item in items:
         row.append(item)
-
         if len(row) == 3:
             keyboard.append(row)
             row = []
@@ -47,7 +46,6 @@ def keyboard_3col(items):
         keyboard.append(row)
 
     keyboard.append(["Back"])
-
     return keyboard
 
 def keyboard_category(items):
@@ -56,7 +54,6 @@ def keyboard_category(items):
 
     for item in items:
         row.append(item)
-
         if len(row) == 3:
             keyboard.append(row)
             row = []
@@ -65,7 +62,6 @@ def keyboard_category(items):
         keyboard.append(row)
 
     keyboard.append(["Back"])
-
     return keyboard
 
 def get_service():
@@ -118,7 +114,6 @@ def delete_account(name):
 
     acc_rows = get_sheet("Accounts!A:A")
     header = acc_rows[0]
-
     remaining = [header]
 
     for row in acc_rows[1:]:
@@ -160,6 +155,38 @@ def add_category(name):
         valueInputOption="RAW",
         body={"values": [[name]]}
     ).execute()
+
+def delete_category(name):
+
+    rows = get_sheet("Sheet1!A:F")
+
+    for row in rows[1:]:
+        if len(row) >= 4 and row[3].strip().lower() == name.lower():
+            return False
+
+    cat_rows = get_sheet("Categories!A:A")
+    header = cat_rows[0]
+    remaining = [header]
+
+    for row in cat_rows[1:]:
+        if row[0].strip().lower() != name.lower():
+            remaining.append(row)
+
+    service = get_service()
+
+    service.spreadsheets().values().clear(
+        spreadsheetId=SHEET_ID,
+        range="Categories!A2:A"
+    ).execute()
+
+    service.spreadsheets().values().update(
+        spreadsheetId=SHEET_ID,
+        range="Categories!A1",
+        valueInputOption="RAW",
+        body={"values": remaining}
+    ).execute()
+
+    return True
 
 # ================= TRANSACTION =================
 
@@ -329,101 +356,106 @@ class handler(BaseHTTPRequestHandler):
                 accounts = get_accounts()
 
                 if not accounts:
-                    send(chat_id, "No accounts found.", main_menu())
+                    send(chat_id, "No accounts found. Add account first.", main_menu())
                     self.send_response(200)
                     self.end_headers()
                     return
 
-                user_states[chat_id] = {"flow":"expense","step":"account","data":{}}
+                user_states[chat_id] = {
+                    "flow": "expense",
+                    "step": "account",
+                    "data": {}
+                }
 
-                send(chat_id,"Select account:",keyboard_3col(accounts))
+                send(chat_id, "Select account:", keyboard_3col(accounts))
 
                 self.send_response(200)
                 self.end_headers()
                 return
 
-            if state and state.get("flow")=="expense":
+            if state and state.get("flow") == "expense":
 
-                if state["step"]=="account":
+                if state["step"] == "account":
 
                     if not account_exists(text):
-                        send(chat_id,"Invalid account.")
+                        send(chat_id, "Invalid account.")
                         self.send_response(200)
                         self.end_headers()
                         return
 
-                    state["data"]["account"]=text
-                    state["step"]="amount"
+                    state["data"]["account"] = text
+                    state["step"] = "amount"
 
-                    send(chat_id,"Enter amount:")
+                    send(chat_id, "Enter amount:")
 
                     self.send_response(200)
                     self.end_headers()
                     return
 
-                if state["step"]=="amount":
+                if state["step"] == "amount":
 
-                    amount=parse_amount(text)
+                    amount = parse_amount(text)
 
                     if not amount:
-                        send(chat_id,"Invalid amount.")
+                        send(chat_id, "Invalid amount.")
                         self.send_response(200)
                         self.end_headers()
                         return
 
-                    balances,_=calculate_account_balance()
+                    balances, _ = calculate_account_balance()
 
-                    if balances.get(state["data"]["account"],0)<amount:
-                        send(chat_id,"Insufficient balance.",main_menu())
+                    if balances.get(state["data"]["account"], 0) < amount:
+                        send(chat_id, "Insufficient balance.", main_menu())
                         user_states.pop(chat_id)
+
                         self.send_response(200)
                         self.end_headers()
                         return
 
-                    state["data"]["amount"]=amount
-                    state["step"]="category"
+                    state["data"]["amount"] = amount
+                    state["step"] = "category"
 
-                    categories=get_categories()
+                    cats = get_categories()
 
-                    if categories:
-                        send(chat_id,"Select category or type new:",keyboard_category(categories))
+                    if cats:
+                        send(chat_id, "Select category or type new:", keyboard_category(cats))
                     else:
-                        send(chat_id,"Type new category:")
+                        send(chat_id, "Enter category:")
 
                     self.send_response(200)
                     self.end_headers()
                     return
 
-                if state["step"]=="category":
+                if state["step"] == "category":
 
-                    category=text.strip()
-
-                    if not category:
-                        send(chat_id,"Invalid category.")
-                        self.send_response(200)
-                        self.end_headers()
-                        return
+                    category = text.strip()
 
                     if not category_exists(category):
                         add_category(category)
 
-                    state["data"]["category"]=category
-                    state["step"]="note"
+                    state["data"]["category"] = category
+                    state["step"] = "note"
 
-                    send(chat_id,"Enter note (or type skip):")
+                    send(chat_id, "Enter note (or type skip):")
 
                     self.send_response(200)
                     self.end_headers()
                     return
 
-                if state["step"]=="note":
+                if state["step"] == "note":
 
-                    note="" if text.lower()=="skip" else text
-                    d=state["data"]
+                    note = "" if text.lower() == "skip" else text
+                    d = state["data"]
 
-                    add_transaction("Expense",d["amount"],d["category"],d["account"],note)
+                    add_transaction(
+                        "Expense",
+                        d["amount"],
+                        d["category"],
+                        d["account"],
+                        note
+                    )
 
-                    send(chat_id,"Expense recorded.",main_menu())
+                    send(chat_id, "Expense recorded.", main_menu())
 
                     user_states.pop(chat_id)
 
@@ -431,14 +463,82 @@ class handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     return
 
-            send(chat_id,"Use menu.",main_menu())
+            # ================= CATEGORY MANAGEMENT =================
+
+            if text == "CatList":
+
+                cats = get_categories()
+
+                msg = "Categories:\n\n"
+
+                for i,c in enumerate(cats,start=1):
+                    msg += f"{i}. {c}\n"
+
+                send(chat_id,msg,main_menu())
+
+                self.send_response(200)
+                self.end_headers()
+                return
+
+            if text == "CatAdd":
+
+                user_states[chat_id]={"flow":"add_category"}
+
+                send(chat_id,"Enter category name:")
+
+                self.send_response(200)
+                self.end_headers()
+                return
+
+            if state and state.get("flow")=="add_category":
+
+                if category_exists(text):
+                    send(chat_id,"Category already exists.",main_menu())
+                else:
+                    add_category(text)
+                    send(chat_id,"Category added.",main_menu())
+
+                user_states.pop(chat_id)
+
+                self.send_response(200)
+                self.end_headers()
+                return
+
+            if text == "CatDelete":
+
+                user_states[chat_id]={"flow":"delete_category"}
+
+                send(chat_id,"Enter category to delete:")
+
+                self.send_response(200)
+                self.end_headers()
+                return
+
+            if state and state.get("flow")=="delete_category":
+
+                if not category_exists(text):
+                    send(chat_id,"Category not found.",main_menu())
+
+                elif not delete_category(text):
+                    send(chat_id,"Category used in transactions.",main_menu())
+
+                else:
+                    send(chat_id,"Category deleted.",main_menu())
+
+                user_states.pop(chat_id)
+
+                self.send_response(200)
+                self.end_headers()
+                return
+
+            send(chat_id, "Use menu.", main_menu())
 
             self.send_response(200)
             self.end_headers()
 
         except Exception as e:
 
-            print("ERROR:",e)
+            print("ERROR:", e)
 
             self.send_response(200)
             self.end_headers()
@@ -451,7 +551,7 @@ class handler(BaseHTTPRequestHandler):
 
 # ================= SERVER =================
 
-if __name__=="__main__":
+if __name__ == "__main__":
 
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN environment variable not set")
@@ -459,10 +559,10 @@ if __name__=="__main__":
     if not SHEET_ID:
         raise ValueError("SHEET_ID environment variable not set")
 
-    PORT=int(os.environ.get("PORT",8080))
+    PORT = int(os.environ.get("PORT", 8080))
 
-    server=HTTPServer(("",PORT),handler)
+    server = HTTPServer(("", PORT), handler)
 
-    print("Server running on port",PORT)
+    print("Server running on port", PORT)
 
     server.serve_forever()
